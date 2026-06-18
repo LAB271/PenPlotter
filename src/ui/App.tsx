@@ -82,6 +82,7 @@ export function App() {
   const [status, setStatus] = useState<StatusReport | null>(null);
   const [progress, setProgress] = useState<{ acked: number; total: number } | null>(null);
   const [alert, setAlert] = useState('');
+  const [needsAuth, setNeedsAuth] = useState(false);
   const [cal, setCal] = useState<Calibration>(loadCalibration);
 
   // Restore the editable session (artwork + page) so reopening the tab / reloading
@@ -109,6 +110,7 @@ export function App() {
     const unsubs = [
       ctrl.on('connected', (e) => {
         setConnected(true);
+        setNeedsAuth(false);
         setVersion(e.version);
         setAlert('');
         pushLog('SYS', `connected — GRBL ${e.version}`);
@@ -203,7 +205,9 @@ export function App() {
         setAlert(`ALARM:${e.code} — unlock ($X) or reset.`);
         pushLog('ALARM', `ALARM:${e.code}`);
       }),
+      ctrl.on('authRequired', () => setNeedsAuth(true)),
     ];
+    void ctrl.connect(); // auto-attach to the daemon on load (prompts for password if needed)
     return () => {
       unsubs.forEach((u) => u());
       void ctrl.disconnect();
@@ -469,6 +473,7 @@ export function App() {
 
   return (
     <div className="flex h-screen flex-col bg-slate-100 text-slate-800">
+      {needsAuth && <LoginOverlay onSubmit={(pw) => ctrl()?.authenticate(pw)} />}
       {/* Top bar */}
       <header className="flex items-center gap-3 border-b border-slate-300 bg-white px-4 py-2 shadow-sm">
         <span className="text-sm font-semibold tracking-tight">PenPlotter271</span>
@@ -906,6 +911,38 @@ function Section(props: { title: string; children: React.ReactNode }) {
       </h2>
       {props.children}
     </section>
+  );
+}
+
+function LoginOverlay({ onSubmit }: { onSubmit: (pw: string) => void }) {
+  const [pw, setPw] = useState('');
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70">
+      <form
+        className="w-72 rounded-lg bg-white p-5 shadow-xl"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (pw) onSubmit(pw);
+        }}
+      >
+        <h2 className="mb-1 text-sm font-semibold">PenPlotter271</h2>
+        <p className="mb-3 text-xs text-slate-500">Enter the password to control the plotter.</p>
+        <input
+          type="password"
+          autoFocus
+          className="mb-3 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          placeholder="Password"
+          value={pw}
+          onChange={(e) => setPw(e.target.value)}
+        />
+        <button
+          type="submit"
+          className="w-full rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Unlock
+        </button>
+      </form>
+    </div>
   );
 }
 

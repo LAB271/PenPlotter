@@ -9,3 +9,8 @@
 # CH340 is usually idVendor 1a86 / idProduct 7523. Verify yours with `lsusb`
 # (look for "QinHeng"/"CH340") and adjust the product id below if different.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="plotter", GROUP="dialout", MODE="0660"
+
+# Disable USB autosuspend for the CH340 so Linux never powers it down when idle
+# (a common cause of the serial link dropping after a while). Targets the USB
+# device node (not the tty), hence SUBSYSTEM=="usb".
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="7523", ATTR{power/control}="on"

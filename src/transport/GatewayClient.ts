@@ -18,6 +18,8 @@ type ClientEvents = {
   control: { inControl: boolean };
   /** The editable session stored on the daemon (null if none), sent on connect. */
   session: unknown;
+  /** The daemon rejected the connection — a password is needed (or wrong). */
+  authRequired: undefined;
 };
 
 /**
@@ -40,8 +42,19 @@ export class GatewayClient {
   private _calibration: Calibration | null = null;
   private nextId = 1;
   private pending = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
+  private token = localStorage.getItem('penplotter271.token') ?? '';
+  private needsAuth = false;
 
   constructor(private url = `ws://${location.hostname}:8717`) {}
+
+  /** Submit a password and (re)connect. Stored so it's remembered next time. */
+  authenticate(password: string): void {
+    this.token = password;
+    localStorage.setItem('penplotter271.token', password);
+    this.needsAuth = false;
+    this.wantOpen = true;
+    this.openSocket();
+  }
 
   on = this.events.on.bind(this.events);
   get connected(): boolean {
@@ -100,27 +113,38 @@ export class GatewayClient {
       (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
     )
       return;
-    const ws = new WebSocket(this.url);
+    const url = this.token ? `${this.url}?token=${encodeURIComponent(this.token)}` : this.url;
+    const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
       // Re-push calibration so the daemon's engine has the right pen Z / feeds.
       if (this._calibration) this.cmd({ cmd: 'setCalibration', calibration: this._calibration });
     };
     ws.onmessage = (ev) => this.onMessage(JSON.parse(ev.data) as ServerMessage);
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (this.ws === ws) this.ws = null;
       // Reject in-flight commands so awaiting callers (e.g. the held-jog loop) stop.
       for (const p of this.pending.values()) p.reject(new Error('disconnected'));
       this.pending.clear();
       this.setConnected(false);
-      if (this.wantOpen) this.retry = setTimeout(() => this.openSocket(), 1500); // reattach to the daemon
+      if (ev.code === 4001 || this.needsAuth) {
+        // Rejected for auth — don't retry; wait for the user to enter a password.
+        this.needsAuth = true;
+        this.events.emit('authRequired', undefined);
+        return;
+      }
+      if (this.wantOpen) this.retry = setTimeout(() => this.openSocket(), 1500); // reattach
     };
     ws.onerror = () => ws.close();
   }
 
   private onMessage(msg: ServerMessage) {
     switch (msg.type) {
+      case 'authError':
+        this.needsAuth = true; // the onclose(4001) that follows emits authRequired
+        break;
       case 'snapshot': {
+        this.needsAuth = false; // got in → password accepted (if any)
         const s = msg.payload;
         this._version = s.version;
         this._settings = s.settings;

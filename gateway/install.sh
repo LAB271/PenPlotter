@@ -32,7 +32,19 @@ sudo iw dev wlan0 set power_save off 2>/dev/null || true   # best-effort; persis
 sudo nmcli connection modify "$(nmcli -t -f NAME connection show --active | head -n1)" \
   802-11-wireless.powersave 2 2>/dev/null || true
 
-# 5. systemd service — GENERATED with this machine's actual user, repo path and
+# 5. Access mode — ask for a UI password. With one set, the UI is reachable on
+#    the WiFi (GATEWAY_HOST=0.0.0.0) and gated by that password. Blank = stay
+#    loopback-only (reach it via an SSH tunnel; strongest, but not browser-easy).
+read -r -p "Set a UI password for browser access on the WiFi (blank = SSH-tunnel only): " UI_PASSWORD || true
+if [ -n "$UI_PASSWORD" ]; then
+  GW_HOST="0.0.0.0"
+  echo "==> LAN access enabled; protected by the password you entered."
+else
+  GW_HOST="127.0.0.1"
+  echo "==> No password → loopback only (use an SSH tunnel)."
+fi
+
+# 6. systemd service — GENERATED with this machine's actual user, repo path and
 #    node path, so it works regardless of username/location (the static
 #    gateway/plotter-gateway.service is just a reference template).
 #    PLOTTER_PATH is left unset → the daemon auto-detects the ttyUSB/ttyACM device.
@@ -51,7 +63,8 @@ SupplementaryGroups=dialout
 WorkingDirectory=$REPO
 ExecStart=$NPX tsx gateway/server.ts
 Environment=GATEWAY_PORT=8717
-Environment=GATEWAY_HOST=127.0.0.1
+Environment=GATEWAY_HOST=$GW_HOST
+Environment=GATEWAY_PASSWORD=$UI_PASSWORD
 Environment=PLOTTER_STATE=$REPO/gateway/.plotter-state.json
 # Environment=PLOTTER_PATH=/dev/plotter
 Restart=always

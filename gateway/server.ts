@@ -15,6 +15,9 @@ const PORT = Number(process.env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
 // Bind to loopback by default so the app is reachable only via an SSH tunnel
 // (access control = SSH keys). Set GATEWAY_HOST=0.0.0.0 to expose on the LAN.
 const HOST = process.env.GATEWAY_HOST ?? '127.0.0.1';
+// Optional shared password. If set, clients must connect with ?token=<password>;
+// the static UI loads, but the control channel (and thus the plotter) is gated.
+const PASSWORD = process.env.GATEWAY_PASSWORD ?? '';
 const DEVICE_PATH = process.env.PLOTTER_PATH; // optional explicit path
 const RETRY_MS = 3000;
 const DIST = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
@@ -180,10 +183,21 @@ function scheduleReconnect() {
     void ensureConnected();
   }, RETRY_MS);
 }
+/** Reject if a promise doesn't settle in time — so a hung connect can't wedge the retry loop. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out`)), ms)),
+  ]);
+}
+
 async function ensureConnected() {
   if (connected) return;
   try {
-    await ctrl.connect();
+    // Time-box the handshake: after a USB drop the reopened port can be half-alive
+    // and `$$` never gets an `ok`, hanging connect() forever (no recovery). The
+    // timeout makes it fail so we clean up and retry until the real device responds.
+    await withTimeout(ctrl.connect(), 12000, 'connect');
     // This machine can't home ($22=0). Soft limits then (a) lock it in "must home"
     // Alarm and (b) false-trip after a position restore, because the work area maps
     // to NEGATIVE machine coords (e.g. Y target:-51, Z target:-3) → ALARM:2. On
@@ -197,6 +211,7 @@ async function ensureConnected() {
     await restoreSavedPosition(); // now Idle → G10 L20 applies (syncs home + position)
   } catch (e) {
     log(`connect failed (${String((e as Error)?.message ?? e)}); retrying in ${RETRY_MS}ms`);
+    await ctrl.disconnect().catch(() => undefined); // close a half-open/zombie port before retrying
     scheduleReconnect();
   }
 }
@@ -312,8 +327,36 @@ const httpServer = createServer(async (req, res) => {
 });
 
 const wss = new WebSocketServer({ server: httpServer });
-wss.on('connection', (ws) => {
+
+// Keepalive: ping each client every 30 s and drop ones that don't pong. Keeps
+// the browser↔Pi link alive through router/WiFi idle timeouts and reaps dead
+// sockets (so a laptop that slept doesn't linger as a phantom controller).
+const alive = new WeakSet<WebSocket>();
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!alive.has(ws)) {
+      ws.terminate();
+      continue;
+    }
+    alive.delete(ws); // expect a pong before the next tick
+    ws.ping();
+  }
+}, 30000);
+wss.on('close', () => clearInterval(heartbeat));
+
+wss.on('connection', (ws, req) => {
+  if (PASSWORD) {
+    const token = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
+    if (token !== PASSWORD) {
+      send(ws, { type: 'authError', message: 'Wrong or missing password.' });
+      ws.close(4001, 'auth'); // 4001 → client shows the password prompt
+      log('client rejected (bad password)');
+      return;
+    }
+  }
   clients.add(ws);
+  alive.add(ws);
+  ws.on('pong', () => alive.add(ws));
   if (!controller) controller = ws; // first client holds control
   send(ws, { type: 'snapshot', payload: snapshot(ws) });
   log(

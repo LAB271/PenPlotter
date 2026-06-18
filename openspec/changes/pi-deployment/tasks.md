@@ -1,5 +1,7 @@
 ## 1. Headless robustness (small code tweaks)
 
+- [x] 1.9 Idle-disconnect hardening (plotter dropped after ~60 min away): disable USB autosuspend for the CH340 (udev `SUBSYSTEM=="usb" … ATTR{power/control}="on"` — classic Linux/Pi cause of an idle serial link powering down) + add a 30 s WebSocket ping/pong keepalive in the daemon (keeps the browser↔Pi link alive through router/WiFi idle timeouts and reaps dead clients). Combined with 1.8's bounded auto-reconnect, a drop now self-heals.
+- [x] 1.8 Auto-reconnect could hang (seen on Pi: plotter `disconnected` mid-session, never recovered, no retry logs). After a USB drop the reopened port can be half-alive so the `$$` handshake never gets `ok` and `ctrl.connect()` hangs forever, wedging the retry loop. Fixed: time-box `connect()` (12 s `withTimeout`) and `disconnect()` to close the half-open port before retrying — so it keeps retrying until the real device responds.
 - [x] 1.7 Daemon-side artwork storage: the editable session (artwork + placement + page) is now stored ON the daemon (`gateway/.session.json`) via a `saveSession` command + carried in the snapshot, so reconnecting from ANY device restores the current drawing. Browser pushes on change (gated by `sessionLoadedRef` so a stale local copy can't clobber a newer one); localStorage kept as the offline/instant fallback. `src/ui/sessionStore.ts` shape reused as the blob.
 - [x] 1.6 Artwork persistence (found on the Pi: reopening the UI / reloading after a reconnect showed an empty canvas — the imported drawing is browser state, not on the daemon). Persist items + placement + page to `localStorage` (`src/ui/sessionStore.ts`) and restore on load, so reopening the tab keeps the drawing and you can re-plot. Per-browser; very large artworks may exceed quota (skipped gracefully). Cross-device "on the Pi" persistence would need daemon-side storage (future).
 - [x] 1.1 State-file path configurable via `PLOTTER_STATE` env (default unchanged); set in the systemd unit
@@ -17,6 +19,8 @@
 - [x] 2.5 Avahi installed by `install.sh` for `<host>.local`; README documents the IP fallback
 
 ## 3. Access (SSH + 1Password) + provisioning
+
+- [x] 3.5 Easy + safe LAN access (user chose browser-password over SSH tunnel): optional shared-password login — daemon reads `GATEWAY_PASSWORD`, gates the WebSocket via `?token=` (rejects with close 4001 → `authError`); browser shows a `LoginOverlay`, stores the token, and the GatewayClient appends it. UI **auto-connects on load** (no Connect click). `install.sh` now prompts for a password and, when set, binds `GATEWAY_HOST=0.0.0.0` (LAN). Caveat: plain ws on the LAN (token in cleartext) — fine for a trusted WiFi; SSH tunnel / Tailscale for stronger.
 
 - [x] 3.1 SSH-tunnel access documented in README (`ssh -L 8717:localhost:8717 …`); daemon loopback bind enforces it. (`sshd`/key-only is a Pi-OS prereq, noted.)
 - [x] 3.2 README documents sharing SSH keys via a 1Password shared vault/group (SSH agent), per-user keys for revocation
