@@ -1,0 +1,11 @@
+# udev rule: stable device name + group access for the plotter (WCH CH340).
+# Installed by gateway/install.sh, or manually:
+#   sudo cp gateway/99-plotter.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+#
+# Creates /dev/plotter (so PLOTTER_PATH is stable regardless of ttyUSB0/1 order)
+# and grants the 'dialout' group read/write (so the service runs without sudo).
+#
+# CH340 is usually idVendor 1a86 / idProduct 7523. Verify yours with `lsusb`
+# (look for "QinHeng"/"CH340") and adjust the product id below if different.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="plotter", GROUP="dialout", MODE="0660"

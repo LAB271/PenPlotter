@@ -1,0 +1,33 @@
+# systemd unit for the PenPlotter271 gateway daemon (Raspberry Pi).
+# Installed by gateway/install.sh, or manually:
+#   sudo cp gateway/plotter-gateway.service /etc/systemd/system/
+#   sudo systemctl enable --now plotter-gateway
+# Logs:  journalctl -u plotter-gateway -f
+#
+# The daemon opens the serial port ONCE and keeps it open; it auto-connects on
+# boot, retries until the plotter is present, then serves the GUI + WebSocket on
+# 127.0.0.1:GATEWAY_PORT (reach it via an SSH tunnel — see gateway/README.md).
+
+[Unit]
+Description=PenPlotter271 gateway daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+# The user must be in the 'dialout' group for serial access (install.sh handles it).
+SupplementaryGroups=dialout
+WorkingDirectory=/home/pi/PenPlotter271
+ExecStart=/usr/bin/npx tsx gateway/server.ts
+Environment=GATEWAY_PORT=8717
+Environment=GATEWAY_HOST=127.0.0.1
+Environment=PLOTTER_PATH=/dev/plotter
+Environment=PLOTTER_STATE=/home/pi/PenPlotter271/gateway/.plotter-state.json
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
