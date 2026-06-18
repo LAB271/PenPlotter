@@ -1,0 +1,78 @@
+import { describe, expect, it } from 'vitest';
+import { GrblController } from '../GrblController';
+import { FakeTransport, tick } from './fakeTransport';
+
+describe('character-counting streaming window', () => {
+  it('sends only as many lines as fit in the 128-byte RX buffer', async () => {
+    const t = new FakeTransport();
+    const c = new GrblController(t);
+
+    // Each line "G1X000" is 6 chars + '\n' = 7 bytes. floor(128 / 7) = 18 fit.
+    const lines = Array.from({ length: 50 }, (_, i) => `G1X${String(i).padStart(3, '0')}`);
+    c.streamProgram(lines);
+    await tick();
+
+    expect(t.lineWrites.length).toBe(18);
+    expect(7 * 18).toBeLessThanOrEqual(128);
+    expect(7 * 19).toBeGreaterThan(128);
+  });
+
+  it('releases the window as acks arrive', async () => {
+    const t = new FakeTransport();
+    const c = new GrblController(t);
+    const lines = Array.from({ length: 50 }, (_, i) => `G1X${String(i).padStart(3, '0')}`);
+    c.streamProgram(lines);
+    await tick();
+    expect(t.lineWrites.length).toBe(18);
+
+    t.feed('ok\r\n'); // frees the oldest 7 bytes
+    await tick();
+    expect(t.lineWrites.length).toBe(19);
+  });
+});
+
+describe('completion detection', () => {
+  it('completes only after queue empty AND state Idle', async () => {
+    const t = new FakeTransport();
+    const c = new GrblController(t);
+    let complete = false;
+    c.on('streamComplete', () => {
+      complete = true;
+    });
+
+    c.streamProgram(['G1X1', 'G1X2']);
+    await tick();
+    t.feed('ok\r\n');
+    t.feed('ok\r\n'); // all lines acked...
+    await tick();
+    expect(complete).toBe(false); // ...but no Idle yet
+
+    t.feed('<Idle|MPos:0.000,0.000,0.000|FS:0,0>\r\n');
+    await tick();
+    expect(complete).toBe(true);
+  });
+});
+
+describe('abort on error', () => {
+  it('stops the stream and surfaces the offending line', async () => {
+    const t = new FakeTransport();
+    const c = new GrblController(t);
+    let erroredLine = '';
+    let abortReason = '';
+    c.on('error', (e) => {
+      erroredLine = e.line;
+    });
+    c.on('streamAborted', (e) => {
+      abortReason = e.reason;
+    });
+
+    c.streamProgram(['G1X1', 'BADCMD', 'G1X3']);
+    await tick();
+    t.feed('ok\r\n'); // first line ok
+    t.feed('error:20\r\n'); // second line rejected
+    await tick();
+
+    expect(erroredLine).toBe('BADCMD');
+    expect(abortReason).toContain('error:20');
+  });
+});
