@@ -98,7 +98,9 @@ export function App() {
   const [paperIdx, setPaperIdx] = useState(restored?.paperIdx ?? 2); // A2
   const [orientation, setOrientation] = useState<Orientation>(restored?.orientation ?? 'landscape');
   const [useCustomPaper, setUseCustomPaper] = useState(restored?.useCustomPaper ?? false);
-  const [customPaper, setCustomPaper] = useState(restored?.customPaper ?? { widthMm: 600, heightMm: 400 });
+  const [customPaper, setCustomPaper] = useState(
+    restored?.customPaper ?? { widthMm: 600, heightMm: 400 },
+  );
 
   useEffect(() => {
     const ctrl = new GatewayClient();
