@@ -24,6 +24,9 @@ const DIST = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
 const STATE_FILE =
   process.env.PLOTTER_STATE ??
   join(fileURLToPath(new URL('.', import.meta.url)), '.plotter-state.json');
+// The editable session (artwork + page layout) lives on the Pi so any device
+// that connects gets the current drawing back.
+const SESSION_FILE = join(fileURLToPath(new URL('.', import.meta.url)), '.session.json');
 
 const transport = new NodeSerialTransport({ path: DEVICE_PATH });
 const ctrl = new GrblController(transport);
@@ -78,6 +81,19 @@ function readSavedState(): SavedState | null {
   } catch {
     return null;
   }
+}
+
+// ---- persisted editable session (artwork + page) ----
+let session: unknown = (() => {
+  try {
+    return JSON.parse(readFileSync(SESSION_FILE, 'utf8')) as unknown;
+  } catch {
+    return null;
+  }
+})();
+function saveSessionBlob(blob: unknown) {
+  session = blob;
+  void writeFile(SESSION_FILE, JSON.stringify(blob)).catch(() => undefined);
 }
 
 /**
@@ -195,6 +211,7 @@ function snapshot(ws: WebSocket): Snapshot {
     inControl: controller === ws,
     paused: ctrl.isPaused,
     restoredNote,
+    session,
   };
 }
 
@@ -258,6 +275,9 @@ async function handleCommand(ws: WebSocket, msg: ClientMessage) {
         break;
       case 'setCalibration':
         ctrl.calibration = msg.calibration;
+        break;
+      case 'saveSession':
+        saveSessionBlob(msg.session);
         break;
       default:
         send(ws, { type: 'cmdError', id, message: `Unknown command` });

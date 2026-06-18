@@ -3,6 +3,7 @@ import { GatewayClient } from '../transport/GatewayClient';
 import { Calibration } from '../grbl/settings';
 import { StatusReport } from '../grbl/types';
 import { loadCalibration, saveCalibration } from './calibrationStore';
+import { loadSession, saveSession, type Session } from './sessionStore';
 import { flattenSvg } from '../plot/svg';
 import { flattenImageFile } from '../plot/raster';
 import { applyDetail } from '../plot/detail';
@@ -83,14 +84,21 @@ export function App() {
   const [alert, setAlert] = useState('');
   const [cal, setCal] = useState<Calibration>(loadCalibration);
 
+  // Restore the editable session (artwork + page) so reopening the tab / reloading
+  // after a reconnect keeps the drawing — it's browser state, not on the daemon.
+  const [restored] = useState(loadSession);
+
   const [jogStep, setJogStep] = useState(10);
-  const [items, setItems] = useState<PlacedArt[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const idRef = useRef(0);
-  const [paperIdx, setPaperIdx] = useState(2); // A2
-  const [orientation, setOrientation] = useState<Orientation>('landscape');
-  const [useCustomPaper, setUseCustomPaper] = useState(false);
-  const [customPaper, setCustomPaper] = useState({ widthMm: 600, heightMm: 400 });
+  const [items, setItems] = useState<PlacedArt[]>(() => restored?.items ?? []);
+  const [selectedId, setSelectedId] = useState<string | null>(restored?.selectedId ?? null);
+  const idRef = useRef(restored?.nextId ?? 0);
+  // Don't push to the daemon until we've synced with its stored session on connect
+  // (avoids a stale local push overwriting a newer session from another device).
+  const sessionLoadedRef = useRef(false);
+  const [paperIdx, setPaperIdx] = useState(restored?.paperIdx ?? 2); // A2
+  const [orientation, setOrientation] = useState<Orientation>(restored?.orientation ?? 'landscape');
+  const [useCustomPaper, setUseCustomPaper] = useState(restored?.useCustomPaper ?? false);
+  const [customPaper, setCustomPaper] = useState(restored?.customPaper ?? { widthMm: 600, heightMm: 400 });
 
   useEffect(() => {
     const ctrl = new GatewayClient();
@@ -174,6 +182,21 @@ export function App() {
         setAlert(`error:${e.code} on "${e.line}"`);
         pushLog('ERR', `error:${e.code} on "${e.line}"`);
       }),
+      ctrl.on('session', (data) => {
+        // Daemon's stored artwork/page is authoritative — restore it on connect so
+        // any device sees the current drawing. (null = daemon has none yet.)
+        const s = data as Session | null;
+        if (s && Array.isArray(s.items)) {
+          setItems(s.items as PlacedArt[]);
+          setSelectedId(s.selectedId ?? null);
+          if (typeof s.nextId === 'number') idRef.current = Math.max(idRef.current, s.nextId);
+          if (typeof s.paperIdx === 'number') setPaperIdx(s.paperIdx);
+          if (s.orientation) setOrientation(s.orientation);
+          if (typeof s.useCustomPaper === 'boolean') setUseCustomPaper(s.useCustomPaper);
+          if (s.customPaper) setCustomPaper(s.customPaper);
+        }
+        sessionLoadedRef.current = true; // now safe to push local edits to the daemon
+      }),
       ctrl.on('alarm', (e) => {
         setAlert(`ALARM:${e.code} — unlock ($X) or reset.`);
         pushLog('ALARM', `ALARM:${e.code}`);
@@ -189,6 +212,22 @@ export function App() {
     if (ctrlRef.current) ctrlRef.current.calibration = cal;
     saveCalibration(cal);
   }, [cal]);
+
+  // Persist the editable session: always to localStorage (instant, offline), and
+  // to the daemon (lives on the Pi, any device) once we've synced its session.
+  useEffect(() => {
+    const blob: Session = {
+      items,
+      selectedId,
+      nextId: idRef.current,
+      paperIdx,
+      orientation,
+      useCustomPaper,
+      customPaper,
+    };
+    saveSession(blob);
+    if (sessionLoadedRef.current) ctrlRef.current?.saveSession(blob);
+  }, [items, selectedId, paperIdx, orientation, useCustomPaper, customPaper]);
 
   // (Device reconnection is now owned by the gateway daemon; the browser client
   // auto-reattaches its WebSocket. No browser-side Web Serial reconnect needed.)

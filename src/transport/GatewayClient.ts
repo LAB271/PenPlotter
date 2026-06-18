@@ -16,6 +16,8 @@ type ClientEvents = {
   log: { dir: 'tx' | 'rx' | 'info'; text: string };
   /** Local-only: control/link state changed (for UI). */
   control: { inControl: boolean };
+  /** The editable session stored on the daemon (null if none), sent on connect. */
+  session: unknown;
 };
 
 /**
@@ -127,6 +129,8 @@ export class GatewayClient {
         this.setInControl(s.inControl);
         this.setConnected(s.connected);
         if (s.restoredNote) this.events.emit('log', { dir: 'info', text: s.restoredNote });
+        // Hand the daemon-stored session to the UI (it restores the artwork/page).
+        this.events.emit('session', s.session ?? null);
         // Continue a plot that was paused by a previous Disconnect-as-pause.
         if (s.paused) this.resume();
         break;
@@ -196,6 +200,10 @@ export class GatewayClient {
   }
   streamProgram(gcode: string[]): void {
     void this.cmd({ cmd: 'plot', gcode }).catch(() => undefined);
+  }
+  /** Persist the editable session (artwork + page) on the daemon. Fire-and-forget. */
+  saveSession(data: unknown): void {
+    void this.cmd({ cmd: 'saveSession', session: data }).catch(() => undefined);
   }
   pause(): void {
     void this.cmd({ cmd: 'pause' }).catch(() => undefined);

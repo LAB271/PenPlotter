@@ -28,7 +28,10 @@ export type ClientCommand =
   | { cmd: 'motorsOff' }
   | { cmd: 'unlock' }
   | { cmd: 'setSetting'; num: number; value: number }
-  | { cmd: 'setCalibration'; calibration: Calibration };
+  | { cmd: 'setCalibration'; calibration: Calibration }
+  // Persist the editable session (artwork + page) on the daemon so it lives on
+  // the Pi and is restored on any device that connects. Opaque blob to the daemon.
+  | { cmd: 'saveSession'; session: unknown };
 
 export type ClientMessage = { type: 'cmd'; id: number } & ClientCommand;
 
@@ -44,6 +47,8 @@ export interface Snapshot {
   paused: boolean;
   /** Note if a remembered position was restored on connect (else null). */
   restoredNote: string | null;
+  /** The editable session (artwork + page) stored on the daemon, or null. */
+  session: unknown | null;
 }
 
 /** Controller events forwarded verbatim (event name === controller event name). */
