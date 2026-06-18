@@ -1,0 +1,7 @@
+node_modules
+dist
+*.local
+.DS_Store
+gateway/.plotter-state.json
+.claude/settings.local.json
+*.FCBak

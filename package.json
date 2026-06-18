@@ -1,0 +1,43 @@
+{
+  "name": "penplotter271",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "gateway": "tsx gateway/server.ts",
+    "gateway:smoke": "tsx gateway/smoke.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:node": "tsc -p tsconfig.node.json",
+    "lint": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\""
+  },
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "konva": "^10.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-konva": "^18.2.16",
+    "serialport": "^13.0.0",
+    "tsx": "^4.22.4",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.1",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/w3c-web-serial": "^1.0.6",
+    "@vitejs/plugin-react": "^4.3.1",
+    "prettier": "^3.3.3",
+    "tailwindcss": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0",
+    "vitest": "^2.0.5"
+  },
+  "allowScripts": {
+    "@serialport/bindings-cpp@13.0.0": true
+  }
+}

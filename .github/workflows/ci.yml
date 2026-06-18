@@ -1,0 +1,29 @@
+name: CI
+
+# When to run: on every push to main and on every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Get your code onto the runner.
+      - uses: actions/checkout@v4
+
+      # 2. Install Node 20 and cache npm downloads for faster runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 3. Install dependencies from the lockfile (clean, reproducible).
+      - run: npm ci
+
+      # 4. The same checks you run locally — if any fail, the build goes red.
+      - run: npm run typecheck
+      - run: npm run typecheck:node
+      - run: npm test
+      - run: npx prettier --check "src/**/*.{ts,tsx}" "gateway/**/*.ts"
