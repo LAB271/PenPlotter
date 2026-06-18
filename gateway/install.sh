@@ -32,9 +32,36 @@ sudo iw dev wlan0 set power_save off 2>/dev/null || true   # best-effort; persis
 sudo nmcli connection modify "$(nmcli -t -f NAME connection show --active | head -n1)" \
   802-11-wireless.powersave 2 2>/dev/null || true
 
-# 5. systemd service: auto-start on boot, auto-connect, restart on crash
-#    (WorkingDirectory in the unit is /home/pi/PenPlotter271 — edit it if your path differs)
-sudo cp gateway/plotter-gateway.service /etc/systemd/system/plotter-gateway.service
+# 5. systemd service — GENERATED with this machine's actual user, repo path and
+#    node path, so it works regardless of username/location (the static
+#    gateway/plotter-gateway.service is just a reference template).
+#    PLOTTER_PATH is left unset → the daemon auto-detects the ttyUSB/ttyACM device.
+#    Pin it (e.g. /dev/plotter from the udev rule) by uncommenting the line below.
+NPX="$(command -v npx)"
+sudo tee /etc/systemd/system/plotter-gateway.service >/dev/null <<EOF
+[Unit]
+Description=PenPlotter271 gateway daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$USER_NAME
+SupplementaryGroups=dialout
+WorkingDirectory=$REPO
+ExecStart=$NPX tsx gateway/server.ts
+Environment=GATEWAY_PORT=8717
+Environment=GATEWAY_HOST=127.0.0.1
+Environment=PLOTTER_STATE=$REPO/gateway/.plotter-state.json
+# Environment=PLOTTER_PATH=/dev/plotter
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now plotter-gateway
 
@@ -46,5 +73,4 @@ echo "Reach the web app from your laptop (same WiFi) via an SSH tunnel:"
 echo "    ssh -L 8717:localhost:8717 $USER_NAME@$(hostname).local"
 echo "    then open http://localhost:8717"
 echo "Logs:  journalctl -u plotter-gateway -f"
-echo "NOTE: if the WorkingDirectory in the unit doesn't match $REPO, edit"
-echo "      /etc/systemd/system/plotter-gateway.service and 'sudo systemctl daemon-reload'."
+echo "Serial device detected:"; ls -l /dev/serial/by-id/ 2>/dev/null || ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "  (none — plug in / power on the plotter)"
