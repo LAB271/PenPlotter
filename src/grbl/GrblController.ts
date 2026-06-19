@@ -92,6 +92,9 @@ export class GrblController {
   // between connects for smooth display), so a reconstructed work position is
   // untrustworthy — the gateway must not persist it. Reset on every (re)connect.
   private _wcoKnown = false;
+  // Current feed-rate override (%). GRBL has no absolute-set byte, so we step
+  // toward a target with the ±10/±1 real-time bytes and track the result here.
+  private _feedOverride = 100;
   private _settings: GrblSettings = {};
 
   calibration: Calibration = { ...DEFAULT_CALIBRATION };
@@ -154,6 +157,7 @@ export class GrblController {
     this._wcoKnown = false; // the cached WCO is now stale until the controller re-reports it
     this.writeChain = Promise.resolve();
     this.paused = false;
+    this._feedOverride = 100;
   }
 
   /** Shared post-open handshake for connect() and reconnect(). */
@@ -320,6 +324,10 @@ export class GrblController {
   streamProgram(rawLines: string[]): void {
     const program = rawLines.map((l) => stripComment(l)).filter((l) => l.length > 0);
     this.paused = false;
+    // Start every plot at 100% feed so speed is predictable (override persists in
+    // GRBL across jobs otherwise).
+    this._feedOverride = 100;
+    void this.sendRealtime(RT.FEED_100).catch(() => undefined);
     this.stream = { total: program.length, aborted: false, acked: 0 };
     this.pendingComplete = false;
     if (program.length === 0) {
@@ -421,6 +429,39 @@ export class GrblController {
 
   jogCancel(): Promise<void> {
     return this.sendRealtime(RT.JOG_CANCEL);
+  }
+
+  /** Current feed-rate override in percent (10–200). */
+  get feedOverride(): number {
+    return this._feedOverride;
+  }
+
+  /**
+   * Step GRBL's real-time feed override toward `targetPct` (clamped 10–200%).
+   * Scales the programmed feed live, so it changes the speed of an in-flight plot
+   * without regenerating G-code — works during a feed-hold (pause) too, taking
+   * effect on resume. GRBL has no absolute-set byte, so we apply ±10%/±1% steps.
+   */
+  async setFeedOverride(targetPct: number): Promise<void> {
+    const target = Math.max(10, Math.min(200, Math.round(targetPct)));
+    let cur = this._feedOverride;
+    while (cur !== target) {
+      const diff = target - cur;
+      if (diff >= 10) {
+        await this.sendRealtime(RT.FEED_PLUS_10);
+        cur += 10;
+      } else if (diff <= -10) {
+        await this.sendRealtime(RT.FEED_MINUS_10);
+        cur -= 10;
+      } else if (diff > 0) {
+        await this.sendRealtime(RT.FEED_PLUS_1);
+        cur += 1;
+      } else {
+        await this.sendRealtime(RT.FEED_MINUS_1);
+        cur -= 1;
+      }
+    }
+    this._feedOverride = target;
   }
 
   /** Lower the pen onto the paper (inverted Z: down is positive), then settle. */

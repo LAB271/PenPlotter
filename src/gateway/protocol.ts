@@ -21,6 +21,7 @@ export type ClientCommand =
   | { cmd: 'stop' }
   | { cmd: 'jog'; dx: number; dy: number; dz: number; feed: number }
   | { cmd: 'jogCancel' }
+  | { cmd: 'feedOverride'; percent: number }
   | { cmd: 'penUp' }
   | { cmd: 'penDown' }
   | { cmd: 'setWorkZero' }

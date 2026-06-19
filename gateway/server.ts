@@ -281,6 +281,9 @@ async function handleCommand(ws: WebSocket, msg: ClientMessage) {
       case 'jogCancel':
         await ctrl.jogCancel();
         break;
+      case 'feedOverride':
+        await ctrl.setFeedOverride(msg.percent);
+        break;
       case 'penUp':
         await ctrl.penUp();
         break;

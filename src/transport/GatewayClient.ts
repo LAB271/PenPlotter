@@ -238,6 +238,10 @@ export class GatewayClient {
   async jogCancel(): Promise<void> {
     await this.cmd({ cmd: 'jogCancel' }).catch(() => undefined);
   }
+  /** Set the plotting-speed override (percent of programmed feed); takes effect live. */
+  async setFeedOverride(percent: number): Promise<void> {
+    await this.cmd({ cmd: 'feedOverride', percent }).catch(() => undefined);
+  }
   async stopAndReturnHome(): Promise<void> {
     await this.cmd({ cmd: 'stop' });
   }

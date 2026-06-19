@@ -48,8 +48,11 @@ export function flattenSvg(svgText: string, toleranceMm: number): ImportResult {
         skipped++;
         continue;
       }
-      for (const d of subpaths) {
-        const local = samplePathD(svg, d, tolUser);
+      // Sample the WHOLE path, then split into polylines at subpath boundaries.
+      // Sampling each subpath as its own <path> (the old approach) mis-placed
+      // relative subpaths — their leading `m` was measured from (0,0) instead of
+      // the running point — which garbled glyphs built from relative subpaths.
+      for (const local of sampleSubpaths(svg, subpaths, tolUser)) {
         const mm = local.map((p) => toMm(p, ctm, unitToMm));
         const simplified = simplifyPolyline(mm, toleranceMm);
         if (simplified.length >= 2) polylines.push(simplified);
@@ -139,22 +142,55 @@ function shapeToSubpathDs(el: SVGGraphicsElement): string[] {
     .filter((s) => /[0-9]/.test(s));
 }
 
-function samplePathD(svg: SVGSVGElement, d: string, stepUser: number): Point[] {
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', d);
-  svg.appendChild(path);
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Sample a path's subpaths into point arrays (one per pen-down stroke), in the
+ * path's local coordinates. Positions come from ONE path element built from all
+ * subpaths joined — so the browser resolves relative subpaths correctly — while
+ * each subpath's own length (length is translation-invariant) decides where the
+ * full path is segmented into separate polylines (pen-ups between them).
+ */
+function sampleSubpaths(svg: SVGSVGElement, subDs: string[], stepUser: number): Point[][] {
+  const full = document.createElementNS(SVG_NS, 'path');
+  full.setAttribute('d', subDs.join(' '));
+  svg.appendChild(full);
   try {
-    const total = path.getTotalLength();
-    if (!total || !isFinite(total)) return [];
-    const n = Math.max(1, Math.ceil(total / stepUser));
-    const pts: Point[] = [];
-    for (let i = 0; i <= n; i++) {
-      const p = path.getPointAtLength((i / n) * total);
-      pts.push({ x: p.x, y: p.y });
+    const out: Point[][] = [];
+    let cum = 0; // arc-length position of the current subpath's start in the full path
+    for (const d of subDs) {
+      const len = subpathLength(svg, d);
+      if (!len || !isFinite(len)) continue; // moveto-only / empty subpath: no stroke
+      const n = Math.max(1, Math.ceil(len / stepUser));
+      const pts: Point[] = [];
+      // Sample strictly INSIDE this subpath's length range. Exactly at a subpath
+      // boundary getPointAtLength is ambiguous between this subpath's end and the
+      // next one's start, which could splice a spurious segment between strokes.
+      const eps = 1e-6;
+      for (let i = 0; i <= n; i++) {
+        const off = (eps + (i / n) * (1 - 2 * eps)) * len;
+        const p = full.getPointAtLength(cum + off);
+        pts.push({ x: p.x, y: p.y });
+      }
+      out.push(pts);
+      cum += len;
     }
-    return pts;
+    return out;
   } finally {
-    svg.removeChild(path);
+    svg.removeChild(full);
+  }
+}
+
+/** Drawn length of a single subpath (measured in isolation; length is position-invariant). */
+function subpathLength(svg: SVGSVGElement, d: string): number {
+  const seg = document.createElementNS(SVG_NS, 'path');
+  seg.setAttribute('d', d);
+  svg.appendChild(seg);
+  try {
+    const len = seg.getTotalLength();
+    return isFinite(len) ? len : 0;
+  } finally {
+    svg.removeChild(seg);
   }
 }
 

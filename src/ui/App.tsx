@@ -122,6 +122,8 @@ export function App() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   // True while a plot is streaming — locks placement + drawing controls.
   const [plotting, setPlotting] = useState(false);
+  // Plotting-speed override (% of programmed feed); applied live via the daemon.
+  const [speedPct, setSpeedPct] = useState(100);
   // Don't push to the daemon until we've synced with its stored session on connect
   // (avoids a stale local push overwriting a newer session from another device).
   const sessionLoadedRef = useRef(false);
@@ -151,6 +153,7 @@ export function App() {
         heldRef.current = false; // stop any in-progress press-and-hold jog loop
         plottingRef.current = false;
         setPlotting(false);
+        setSpeedPct(100);
         pushLog('SYS', 'disconnected');
       }),
       ctrl.on('status', (s) => {
@@ -339,21 +342,13 @@ export function App() {
     await run(() => ctrl()!.connect());
   }
 
-  async function startJog(dx: number, dy: number) {
+  // One discrete jog of exactly `jogStep` mm per click. (The old press-and-hold
+  // loop cancelled the jog on release, which truncated the move — so the set
+  // step distance was never honoured. Click again to step further.)
+  function jogBy(dx: number, dy: number) {
     const c = ctrl();
     if (!c || !connected) return;
-    heldRef.current = true;
-    do {
-      try {
-        await c.jog(dx * jogStep, dy * jogStep, 0, cal.jogFeed);
-      } catch {
-        break;
-      }
-    } while (heldRef.current);
-  }
-  function stopJog() {
-    heldRef.current = false;
-    ctrl()?.jogCancel();
+    void c.jog(dx * jogStep, dy * jogStep, 0, cal.jogFeed).catch(() => undefined);
   }
 
   function addArtwork(
@@ -569,6 +564,7 @@ export function App() {
     lastMposRef.current = null;
     plottingRef.current = true;
     setPlotting(true);
+    setSpeedPct(100); // each plot starts at 100% (the engine resets the override too)
     pausedRef.current = false;
     ackedRef.current = 0;
     totalRef.current = gc.length;
@@ -666,7 +662,7 @@ export function App() {
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
         {/* Left panel */}
         <aside className="order-2 w-full shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
-          <Section title="Artwork">
+          <Section title="Artwork" className="hidden md:block">
             <div className="flex gap-2">
               <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
                 + SVG
@@ -733,35 +729,15 @@ export function App() {
 
           <Section title="Jog">
             <NumberField label="Step (mm)" value={jogStep} onChange={setJogStep} />
-            <div className="mt-2 grid w-36 grid-cols-3 gap-1">
+            <div className="mt-2 grid w-44 grid-cols-3 gap-1 md:w-36">
               <span />
-              <JogBtn
-                label="↑"
-                onDown={() => startJog(0, -1)}
-                onUp={stopJog}
-                disabled={!connected}
-              />
+              <JogBtn label="↑" onPress={() => jogBy(0, -1)} disabled={!connected} />
               <span />
-              <JogBtn
-                label="←"
-                onDown={() => startJog(-1, 0)}
-                onUp={stopJog}
-                disabled={!connected}
-              />
+              <JogBtn label="←" onPress={() => jogBy(-1, 0)} disabled={!connected} />
               <span />
-              <JogBtn
-                label="→"
-                onDown={() => startJog(1, 0)}
-                onUp={stopJog}
-                disabled={!connected}
-              />
+              <JogBtn label="→" onPress={() => jogBy(1, 0)} disabled={!connected} />
               <span />
-              <JogBtn
-                label="↓"
-                onDown={() => startJog(0, 1)}
-                onUp={stopJog}
-                disabled={!connected}
-              />
+              <JogBtn label="↓" onPress={() => jogBy(0, 1)} disabled={!connected} />
               <span />
             </div>
             <div className="mt-2 flex gap-2">
@@ -842,7 +818,7 @@ export function App() {
             </div>
           </Section>
 
-          <Section title="Pen & feeds">
+          <Section title="Pen & feeds" className="hidden md:block">
             <NumberField
               label="Pen-down Z"
               value={cal.penDownZ}
@@ -881,7 +857,7 @@ export function App() {
             />
           </Section>
 
-          <Section title="Drawing controls">
+          <Section title="Drawing controls" className="hidden md:block">
             {!selectedItem && (
               <p className="text-xs text-slate-500">Select an artwork to fine-tune its look.</p>
             )}
@@ -997,6 +973,25 @@ export function App() {
           {pct > 0 ? `${pct}%` : ''}
           {progress ? ` · ${progress.acked}/${progress.total} lines` : ''}
         </span>
+        {/* Speed = live feed override (pause, change, resume). Desktop only. */}
+        <label className="hidden items-center gap-1 md:flex" title="Plotting speed (% of feed)">
+          <span className="text-slate-500">Speed</span>
+          <input
+            type="number"
+            className={`${field} w-16`}
+            value={speedPct}
+            min={10}
+            max={200}
+            step={10}
+            disabled={!connected}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setSpeedPct(v);
+              void ctrl()?.setFeedOverride(v);
+            }}
+          />
+          <span className="text-slate-500">%</span>
+        </label>
         <div className="ml-auto flex gap-2">
           <button
             className={transportBtn}
@@ -1055,9 +1050,9 @@ const btnPrimary =
   'rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40';
 const field = 'rounded border border-slate-300 px-1.5 py-1 text-xs';
 
-function Section(props: { title: string; children: React.ReactNode }) {
+function Section(props: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <section className="mb-4">
+    <section className={`mb-4 ${props.className ?? ''}`}>
       <h2 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
         {props.title}
       </h2>
@@ -1157,14 +1152,12 @@ function Slider(props: {
   );
 }
 
-function JogBtn(props: { label: string; onDown: () => void; onUp: () => void; disabled: boolean }) {
+function JogBtn(props: { label: string; onPress: () => void; disabled: boolean }) {
   return (
     <button
-      className="rounded border border-slate-300 bg-white py-2 text-xs hover:bg-slate-50 disabled:opacity-40"
+      className="rounded border border-slate-300 bg-white py-3 text-sm hover:bg-slate-50 disabled:opacity-40 md:py-2 md:text-xs"
       disabled={props.disabled}
-      onPointerDown={props.onDown}
-      onPointerUp={props.onUp}
-      onPointerLeave={props.onUp}
+      onClick={props.onPress}
     >
       {props.label}
     </button>
