@@ -6,3 +6,4 @@ gateway/.plotter-state.json
 gateway/.session.json
 .claude/settings.local.json
 *.FCBak
+.claude/worktrees/
