@@ -475,7 +475,7 @@ export function App() {
     <div className="flex h-screen flex-col bg-slate-100 text-slate-800">
       {needsAuth && <LoginOverlay onSubmit={(pw) => ctrl()?.authenticate(pw)} />}
       {/* Top bar */}
-      <header className="flex items-center gap-3 border-b border-slate-300 bg-white px-4 py-2 shadow-sm">
+      <header className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 shadow-sm md:gap-3">
         <span className="text-sm font-semibold tracking-tight">PenPlotter271</span>
         <span
           className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-slate-300'}`}
@@ -551,9 +551,9 @@ export function App() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
         {/* Left panel */}
-        <aside className="w-60 shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm">
+        <aside className="order-2 w-full shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
           <Section title="Artwork">
             <div className="flex gap-2">
               <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
@@ -683,7 +683,10 @@ export function App() {
         </aside>
 
         {/* Center canvas */}
-        <div ref={canvasBox} className="relative min-w-0 flex-1 bg-slate-200">
+        <div
+          ref={canvasBox}
+          className="relative order-1 h-[55vh] min-w-0 shrink-0 bg-slate-200 md:order-2 md:h-auto md:flex-1"
+        >
           {size.width > 0 && (
             <PlotCanvas
               width={size.width}
@@ -707,7 +710,7 @@ export function App() {
         </div>
 
         {/* Right panel */}
-        <aside className="w-64 shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm">
+        <aside className="order-3 w-full shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:w-64">
           <Section title="Home / calibration">
             <p className="mb-1.5 text-xs text-slate-500">
               Move the pen to the paper's top-left corner — jog with the arrows, or use “Motors off”
@@ -836,7 +839,7 @@ export function App() {
       )}
 
       {/* Bottom strip */}
-      <footer className="flex items-center gap-4 border-t border-slate-300 bg-white px-4 py-2 text-xs">
+      <footer className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-300 bg-white px-4 py-2 text-xs">
         <span>
           State: <b>{status?.state ?? '—'}</b>
         </span>
@@ -851,7 +854,7 @@ export function App() {
         </span>
         <div className="ml-auto flex gap-2">
           <button
-            className={btn}
+            className={transportBtn}
             disabled={!connected}
             onClick={() => {
               pausedRef.current = true;
@@ -862,7 +865,7 @@ export function App() {
             Pause
           </button>
           <button
-            className={btn}
+            className={transportBtn}
             disabled={!connected}
             onClick={() => {
               pausedRef.current = false;
@@ -875,7 +878,7 @@ export function App() {
             Resume
           </button>
           <button
-            className={btn}
+            className={transportBtn}
             disabled={!connected}
             onClick={() => {
               pausedRef.current = false;
@@ -899,6 +902,10 @@ export function App() {
 
 const btn =
   'rounded border border-slate-300 bg-white px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-40';
+// Transport controls (Pause/Resume/Stop): large touch targets on phones,
+// compact on desktop (md:) where they match the regular `btn` size.
+const transportBtn =
+  'rounded border border-slate-300 bg-white px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-40 md:px-2 md:py-1 md:text-xs';
 const btnPrimary =
   'rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40';
 const field = 'rounded border border-slate-300 px-1.5 py-1 text-xs';
