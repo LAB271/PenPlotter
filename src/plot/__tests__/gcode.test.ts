@@ -94,11 +94,7 @@ describe('generateGcode', () => {
       OPTS,
     );
     const travels = gc.filter((l) => l.endsWith('F5000'));
-    expect(travels.slice(0, 3)).toEqual([
-      'G1 X5 Y0 F5000',
-      'G1 X10 Y0 F5000',
-      'G1 X100 Y0 F5000',
-    ]);
+    expect(travels.slice(0, 3)).toEqual(['G1 X5 Y0 F5000', 'G1 X10 Y0 F5000', 'G1 X100 Y0 F5000']);
   });
 
   it('reverses a stroke when its end is closest to the current position', () => {

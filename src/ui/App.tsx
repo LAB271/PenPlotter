@@ -735,243 +735,243 @@ export function App() {
         <div className="flex max-h-[50%] min-h-0 shrink-0 overflow-hidden md:contents">
           {/* Left panel */}
           <aside className="w-1/2 shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
-          <Section title="Artwork" className="hidden md:block">
-            <div className="flex gap-2">
-              <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
-                + SVG
-                <input type="file" accept=".svg" onChange={onLoadSvg} className="hidden" />
-              </label>
-              <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
-                + PNG
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg"
-                  onChange={onLoadPng}
-                  className="hidden"
-                />
-              </label>
-            </div>
-
-            {items.length > 0 && (
-              <ul className="mt-2 space-y-1">
-                {items.map((it) => (
-                  <li
-                    key={it.id}
-                    className={`flex items-center gap-1 rounded border px-2 py-1 text-xs ${
-                      it.id === selectedId ? 'border-blue-500 bg-blue-50' : 'border-slate-200'
-                    }`}
-                  >
-                    <button
-                      className="min-w-0 flex-1 truncate text-left"
-                      onClick={() => setSelectedId(it.id)}
-                    >
-                      {it.name}
-                    </button>
-                    <button
-                      className="shrink-0 px-1 text-slate-400 hover:text-red-600"
-                      title="Remove"
-                      onClick={() => removeItem(it.id)}
-                    >
-                      ✕
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div className="mt-2 grid grid-cols-3 gap-1">
-              <button className={btn} disabled={!selectedItem} onClick={fitToCorner}>
-                Fit corner
-              </button>
-              <button className={btn} disabled={!selectedItem} onClick={fitToPaper}>
-                Fit paper
-              </button>
-              <button className={btn} disabled={!selectedItem} onClick={rotate90}>
-                Rotate 90°
-              </button>
-            </div>
-            {selectedItem && (
-              <p className="mt-2 text-xs text-slate-500">
-                {selectedStrokes} strokes · {selectedItem.widthMm.toFixed(0)}×
-                {selectedItem.heightMm.toFixed(0)} mm ·{' '}
-                {(selectedItem.placement.scale * 100).toFixed(0)}% ·{' '}
-                {selectedItem.placement.rotation.toFixed(0)}°
-              </p>
-            )}
-          </Section>
-
-          <Section title="Jog">
-            <NumberField label="Step (mm)" value={jogStep} onChange={setJogStep} />
-            <div className="mt-2 grid w-44 grid-cols-3 gap-1 md:w-36">
-              <span />
-              <JogBtn label="↑" onPress={() => jogBy(0, -1)} disabled={!connected} />
-              <span />
-              <JogBtn label="←" onPress={() => jogBy(-1, 0)} disabled={!connected} />
-              <span />
-              <JogBtn label="→" onPress={() => jogBy(1, 0)} disabled={!connected} />
-              <span />
-              <JogBtn label="↓" onPress={() => jogBy(0, 1)} disabled={!connected} />
-              <span />
-            </div>
-            <div className="mt-2 flex gap-2">
-              <button className={btn} disabled={!connected} onClick={() => ctrl()?.penDown()}>
-                Pen down
-              </button>
-              <button className={btn} disabled={!connected} onClick={() => ctrl()?.penUp()}>
-                Pen up
-              </button>
-            </div>
-          </Section>
-        </aside>
-
-        {/* Right panel */}
-        <aside className="w-1/2 shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:order-3 md:w-64">
-          <Section title="Home / calibration">
-            <p className="mb-1.5 text-xs text-slate-500">
-              Move the pen to the paper's top-left corner — jog with the arrows, or use “Motors off”
-              and push it by hand — then Calibrate.
-            </p>
-            <button
-              className={`${btnPrimary} w-full`}
-              disabled={!connected}
-              onClick={() => run(() => ctrl()!.setWorkZero())}
-            >
-              Calibrate (set home here)
-            </button>
-            <div className="mt-1 grid grid-cols-3 gap-1">
-              <button
-                className={btn}
-                disabled={!connected}
-                onClick={() => run(() => ctrl()!.goToWorkZero())}
-              >
-                Go to home
-              </button>
-              <button
-                className={btn}
-                disabled={!connected}
-                onClick={() => run(() => ctrl()!.motorsOff())}
-              >
-                Motors off
-              </button>
-              <button
-                className={btn}
-                disabled={!connected}
-                onClick={() => run(() => ctrl()!.unlock())}
-              >
-                Unlock
-              </button>
-            </div>
-          </Section>
-
-          <Section title="Pen & feeds" className="hidden md:block">
-            <NumberField
-              label="Pen-down Z"
-              value={cal.penDownZ}
-              step={0.1}
-              onChange={setCalField('penDownZ')}
-            />
-            <NumberField
-              label="Pen-up Z"
-              value={cal.penUpZ}
-              step={0.1}
-              onChange={setCalField('penUpZ')}
-            />
-            <NumberField
-              label="Dwell (ms)"
-              value={cal.penDwellMs}
-              step={10}
-              onChange={setCalField('penDwellMs')}
-            />
-            <NumberField
-              label="Draw feed"
-              value={cal.drawFeed}
-              step={100}
-              onChange={setCalField('drawFeed')}
-            />
-            <NumberField
-              label="Travel feed"
-              value={cal.travelFeed}
-              step={100}
-              onChange={setCalField('travelFeed')}
-            />
-            <NumberField
-              label="Jog feed"
-              value={cal.jogFeed}
-              step={100}
-              onChange={setCalField('jogFeed')}
-            />
-          </Section>
-
-          <Section title="Drawing controls" className="hidden md:block">
-            {!selectedItem && (
-              <p className="text-xs text-slate-500">Select an artwork to fine-tune its look.</p>
-            )}
-            {selectedItem && (
-              <>
-                {plotting && (
-                  <p className="mb-1.5 text-xs text-amber-600">Locked while plotting.</p>
-                )}
-                {!plotting && !sourceAvailable && (
-                  <p className="mb-1.5 text-xs text-slate-500">
-                    Re-import to re-tune source controls (the current look is kept).
-                  </p>
-                )}
-                {selectedItem.kind === 'png' ? (
-                  <>
-                    <Slider
-                      label="Threshold"
-                      value={selectedItem.controls.threshold}
-                      {...CONTROL_RANGES.threshold}
-                      disabled={srcLocked}
-                      onChange={(v) => setControl(selectedItem.id, 'threshold', v)}
-                    />
-                    <Slider
-                      label="Levels"
-                      value={selectedItem.controls.levels}
-                      {...CONTROL_RANGES.levels}
-                      disabled={srcLocked}
-                      onChange={(v) => setControl(selectedItem.id, 'levels', v)}
-                    />
-                    <label className="mb-2 flex items-center justify-between text-xs text-slate-600">
-                      <span>Invert</span>
-                      <input
-                        type="checkbox"
-                        checked={selectedItem.controls.invert}
-                        disabled={srcLocked}
-                        onChange={(e) => setControl(selectedItem.id, 'invert', e.target.checked)}
-                      />
-                    </label>
-                    <Slider
-                      label="Contrast"
-                      value={selectedItem.controls.contrast}
-                      {...CONTROL_RANGES.contrast}
-                      disabled={srcLocked}
-                      onChange={(v) => setControl(selectedItem.id, 'contrast', v)}
-                    />
-                  </>
-                ) : (
-                  <Slider
-                    label="Sampling (mm)"
-                    value={selectedItem.controls.samplingMm}
-                    {...CONTROL_RANGES.samplingMm}
-                    disabled={srcLocked}
-                    onChange={(v) => setControl(selectedItem.id, 'samplingMm', v)}
+            <Section title="Artwork" className="hidden md:block">
+              <div className="flex gap-2">
+                <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
+                  + SVG
+                  <input type="file" accept=".svg" onChange={onLoadSvg} className="hidden" />
+                </label>
+                <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
+                  + PNG
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg"
+                    onChange={onLoadPng}
+                    className="hidden"
                   />
-                )}
-                <Slider
-                  label="Detail / smoothing"
-                  value={selectedItem.controls.detail}
-                  {...CONTROL_RANGES.detail}
-                  disabled={plotting}
-                  onChange={(v) => setControl(selectedItem.id, 'detail', v)}
-                />
-                <p className="mt-1 text-[10px] text-slate-400">
-                  {selectedStrokes} strokes{updatingId === selectedItem.id ? ' · updating…' : ''}
+                </label>
+              </div>
+
+              {items.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {items.map((it) => (
+                    <li
+                      key={it.id}
+                      className={`flex items-center gap-1 rounded border px-2 py-1 text-xs ${
+                        it.id === selectedId ? 'border-blue-500 bg-blue-50' : 'border-slate-200'
+                      }`}
+                    >
+                      <button
+                        className="min-w-0 flex-1 truncate text-left"
+                        onClick={() => setSelectedId(it.id)}
+                      >
+                        {it.name}
+                      </button>
+                      <button
+                        className="shrink-0 px-1 text-slate-400 hover:text-red-600"
+                        title="Remove"
+                        onClick={() => removeItem(it.id)}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="mt-2 grid grid-cols-3 gap-1">
+                <button className={btn} disabled={!selectedItem} onClick={fitToCorner}>
+                  Fit corner
+                </button>
+                <button className={btn} disabled={!selectedItem} onClick={fitToPaper}>
+                  Fit paper
+                </button>
+                <button className={btn} disabled={!selectedItem} onClick={rotate90}>
+                  Rotate 90°
+                </button>
+              </div>
+              {selectedItem && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {selectedStrokes} strokes · {selectedItem.widthMm.toFixed(0)}×
+                  {selectedItem.heightMm.toFixed(0)} mm ·{' '}
+                  {(selectedItem.placement.scale * 100).toFixed(0)}% ·{' '}
+                  {selectedItem.placement.rotation.toFixed(0)}°
                 </p>
-              </>
-            )}
-          </Section>
-        </aside>
+              )}
+            </Section>
+
+            <Section title="Jog">
+              <NumberField label="Step (mm)" value={jogStep} onChange={setJogStep} />
+              <div className="mt-2 grid w-44 grid-cols-3 gap-1 md:w-36">
+                <span />
+                <JogBtn label="↑" onPress={() => jogBy(0, -1)} disabled={!connected} />
+                <span />
+                <JogBtn label="←" onPress={() => jogBy(-1, 0)} disabled={!connected} />
+                <span />
+                <JogBtn label="→" onPress={() => jogBy(1, 0)} disabled={!connected} />
+                <span />
+                <JogBtn label="↓" onPress={() => jogBy(0, 1)} disabled={!connected} />
+                <span />
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button className={btn} disabled={!connected} onClick={() => ctrl()?.penDown()}>
+                  Pen down
+                </button>
+                <button className={btn} disabled={!connected} onClick={() => ctrl()?.penUp()}>
+                  Pen up
+                </button>
+              </div>
+            </Section>
+          </aside>
+
+          {/* Right panel */}
+          <aside className="w-1/2 shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:order-3 md:w-64">
+            <Section title="Home / calibration">
+              <p className="mb-1.5 text-xs text-slate-500">
+                Move the pen to the paper's top-left corner — jog with the arrows, or use “Motors
+                off” and push it by hand — then Calibrate.
+              </p>
+              <button
+                className={`${btnPrimary} w-full`}
+                disabled={!connected}
+                onClick={() => run(() => ctrl()!.setWorkZero())}
+              >
+                Calibrate (set home here)
+              </button>
+              <div className="mt-1 grid grid-cols-3 gap-1">
+                <button
+                  className={btn}
+                  disabled={!connected}
+                  onClick={() => run(() => ctrl()!.goToWorkZero())}
+                >
+                  Go to home
+                </button>
+                <button
+                  className={btn}
+                  disabled={!connected}
+                  onClick={() => run(() => ctrl()!.motorsOff())}
+                >
+                  Motors off
+                </button>
+                <button
+                  className={btn}
+                  disabled={!connected}
+                  onClick={() => run(() => ctrl()!.unlock())}
+                >
+                  Unlock
+                </button>
+              </div>
+            </Section>
+
+            <Section title="Pen & feeds" className="hidden md:block">
+              <NumberField
+                label="Pen-down Z"
+                value={cal.penDownZ}
+                step={0.1}
+                onChange={setCalField('penDownZ')}
+              />
+              <NumberField
+                label="Pen-up Z"
+                value={cal.penUpZ}
+                step={0.1}
+                onChange={setCalField('penUpZ')}
+              />
+              <NumberField
+                label="Dwell (ms)"
+                value={cal.penDwellMs}
+                step={10}
+                onChange={setCalField('penDwellMs')}
+              />
+              <NumberField
+                label="Draw feed"
+                value={cal.drawFeed}
+                step={100}
+                onChange={setCalField('drawFeed')}
+              />
+              <NumberField
+                label="Travel feed"
+                value={cal.travelFeed}
+                step={100}
+                onChange={setCalField('travelFeed')}
+              />
+              <NumberField
+                label="Jog feed"
+                value={cal.jogFeed}
+                step={100}
+                onChange={setCalField('jogFeed')}
+              />
+            </Section>
+
+            <Section title="Drawing controls" className="hidden md:block">
+              {!selectedItem && (
+                <p className="text-xs text-slate-500">Select an artwork to fine-tune its look.</p>
+              )}
+              {selectedItem && (
+                <>
+                  {plotting && (
+                    <p className="mb-1.5 text-xs text-amber-600">Locked while plotting.</p>
+                  )}
+                  {!plotting && !sourceAvailable && (
+                    <p className="mb-1.5 text-xs text-slate-500">
+                      Re-import to re-tune source controls (the current look is kept).
+                    </p>
+                  )}
+                  {selectedItem.kind === 'png' ? (
+                    <>
+                      <Slider
+                        label="Threshold"
+                        value={selectedItem.controls.threshold}
+                        {...CONTROL_RANGES.threshold}
+                        disabled={srcLocked}
+                        onChange={(v) => setControl(selectedItem.id, 'threshold', v)}
+                      />
+                      <Slider
+                        label="Levels"
+                        value={selectedItem.controls.levels}
+                        {...CONTROL_RANGES.levels}
+                        disabled={srcLocked}
+                        onChange={(v) => setControl(selectedItem.id, 'levels', v)}
+                      />
+                      <label className="mb-2 flex items-center justify-between text-xs text-slate-600">
+                        <span>Invert</span>
+                        <input
+                          type="checkbox"
+                          checked={selectedItem.controls.invert}
+                          disabled={srcLocked}
+                          onChange={(e) => setControl(selectedItem.id, 'invert', e.target.checked)}
+                        />
+                      </label>
+                      <Slider
+                        label="Contrast"
+                        value={selectedItem.controls.contrast}
+                        {...CONTROL_RANGES.contrast}
+                        disabled={srcLocked}
+                        onChange={(v) => setControl(selectedItem.id, 'contrast', v)}
+                      />
+                    </>
+                  ) : (
+                    <Slider
+                      label="Sampling (mm)"
+                      value={selectedItem.controls.samplingMm}
+                      {...CONTROL_RANGES.samplingMm}
+                      disabled={srcLocked}
+                      onChange={(v) => setControl(selectedItem.id, 'samplingMm', v)}
+                    />
+                  )}
+                  <Slider
+                    label="Detail / smoothing"
+                    value={selectedItem.controls.detail}
+                    {...CONTROL_RANGES.detail}
+                    disabled={plotting}
+                    onChange={(v) => setControl(selectedItem.id, 'detail', v)}
+                  />
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {selectedStrokes} strokes{updatingId === selectedItem.id ? ' · updating…' : ''}
+                  </p>
+                </>
+              )}
+            </Section>
+          </aside>
         </div>
       </div>
 
