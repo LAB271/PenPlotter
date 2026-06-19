@@ -155,14 +155,19 @@ for the full daemon behavior and access notes.
 ### Deploying updates from the laptop (rsync — the Pi is not on git)
 
 The Pi has **no git checkout**; code is pushed to it from the laptop with `rsync` over
-SSH and then rebuilt and restarted there. From the repo root on the laptop:
+SSH and then rebuilt and restarted there. Run this from anywhere on the laptop — the
+source is given as an **absolute path** (with a trailing `/`, meaning "the contents of
+this folder") so it can't accidentally sync the wrong directory:
 
 ```bash
 # 1. push the source (skip node_modules, the build output, and .git)
+#    Source is the absolute repo path — do NOT use "./" (if you're in the wrong
+#    directory, "./" + --delete will push junk and wipe the repo on the Pi).
 rsync -av --delete \
   --exclude node_modules --exclude dist --exclude .git \
   --exclude 'gateway/.plotter-state.json' \
-  ./ penplotter@penplotter.local:~/PenPlotter271/
+  /Users/dsiderius/Desktop/Internal_Projects/PenPlotter271/ \
+  penplotter@penplotter.local:~/PenPlotter271/
 
 # 2. rebuild on the Pi and restart the daemon
 ssh penplotter@penplotter.local '
