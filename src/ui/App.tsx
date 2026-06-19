@@ -659,9 +659,9 @@ export function App() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
-        {/* Left panel */}
-        <aside className="order-2 w-full shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
+      <div className="flex min-h-0 flex-1 flex-wrap content-start overflow-y-auto md:flex-nowrap md:overflow-hidden">
+        {/* Left panel — on phones it shares the row below the canvas with the right panel. */}
+        <aside className="order-2 w-1/2 shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
           <Section title="Artwork" className="hidden md:block">
             <div className="flex gap-2">
               <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
@@ -754,7 +754,7 @@ export function App() {
         {/* Center canvas */}
         <div
           ref={canvasBox}
-          className="relative order-1 h-[55vh] min-w-0 shrink-0 bg-slate-200 md:order-2 md:h-auto md:flex-1"
+          className="relative order-1 h-[42vh] w-full min-w-0 shrink-0 bg-slate-200 md:order-2 md:h-auto md:w-auto md:flex-1"
         >
           {size.width > 0 && (
             <PlotCanvas
@@ -780,7 +780,7 @@ export function App() {
         </div>
 
         {/* Right panel */}
-        <aside className="order-3 w-full shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:w-64">
+        <aside className="order-3 w-1/2 shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:w-64">
           <Section title="Home / calibration">
             <p className="mb-1.5 text-xs text-slate-500">
               Move the pen to the paper's top-left corner — jog with the arrows, or use “Motors off”
