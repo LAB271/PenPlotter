@@ -1,5 +1,6 @@
 import type { Placement, Polyline } from '../plot/types';
 import type { ArtControls } from '../plot/controls';
+import type { Calibration } from '../grbl/settings';
 
 /** A placed artwork as persisted (matches App's PlacedArt). */
 export interface PersistedArt {
@@ -28,6 +29,9 @@ export interface Session {
   orientation: 'landscape' | 'portrait';
   useCustomPaper: boolean;
   customPaper: { widthMm: number; heightMm: number };
+  /** Machine calibration (pen Z, feeds incl. draw speed). Shared across devices so
+   * a plot started from any device uses the same setup. Optional for old sessions. */
+  calibration?: Calibration;
 }
 
 const KEY = 'penplotter271.session';

@@ -3,9 +3,7 @@
 ## Purpose
 
 Define the WebSocket protocol between the gateway daemon and its clients: the command channel that drives the machine, the event channel that pushes live machine state, single-operator control arbitration, and the browser thin-client transport that replaces direct Web Serial use in the GUI.
-
 ## Requirements
-
 ### Requirement: WebSocket command channel
 
 The daemon SHALL expose a WebSocket endpoint that accepts JSON commands which map to the controller's operations — at minimum: plot (send a G-code program), pause, resume, stop, jog, jog-cancel, pen up/down, set work zero, go to work zero, motors off, unlock, and write a setting. Unknown or malformed commands SHALL be rejected without affecting the connection.
@@ -56,3 +54,18 @@ The browser GUI SHALL talk to the plotter only through a gateway client that spe
 
 - **WHEN** the operator uses the GUI (jog, set zero, plot, pause/stop, watch the live marker and progress)
 - **THEN** every action and update flows over the WebSocket gateway, with no direct Web Serial use in the browser
+
+### Requirement: Shared editable session includes calibration
+
+The daemon SHALL store the editable session — placed artwork, page layout, AND machine calibration (pen Z, dwell, and feeds including the draw speed) — and serve it to every client on attach. A client SHALL adopt the shared calibration on connect, so a plot started from any device uses the same setup regardless of which device starts it. If the stored session carries no calibration (an older session), the client SHALL keep its local calibration and seed it into the shared session rather than overwriting it with a default.
+
+#### Scenario: A phone-started plot uses the laptop's speed
+
+- **WHEN** a phone connects after the laptop has set up the session and starts a plot
+- **THEN** the phone adopts the shared calibration and the plot runs at the same draw speed (and pen settings) as it would from the laptop
+
+#### Scenario: Older session without calibration
+
+- **WHEN** the stored session has no calibration field
+- **THEN** the connecting client keeps its own calibration and seeds it into the shared session, rather than adopting a default
+

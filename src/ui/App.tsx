@@ -233,6 +233,11 @@ export function App() {
           if (s.orientation) setOrientation(s.orientation);
           if (typeof s.useCustomPaper === 'boolean') setUseCustomPaper(s.useCustomPaper);
           if (s.customPaper) setCustomPaper(s.customPaper);
+          // Adopt the shared calibration (pen Z + feeds incl. draw speed) so a plot
+          // started from this device uses the same setup as the laptop — the plot's
+          // G-code is generated here from `cal`, so without this a phone would bake
+          // in its own (default, slow) feeds.
+          if (s.calibration) setCal((prev) => ({ ...prev, ...s.calibration }));
         }
         sessionLoadedRef.current = true; // now safe to push local edits to the daemon
       }),
@@ -265,10 +270,11 @@ export function App() {
       orientation,
       useCustomPaper,
       customPaper,
+      calibration: cal,
     };
     saveSession(blob);
     if (sessionLoadedRef.current) ctrlRef.current?.saveSession(blob);
-  }, [items, selectedId, paperIdx, orientation, useCustomPaper, customPaper]);
+  }, [items, selectedId, paperIdx, orientation, useCustomPaper, customPaper, cal]);
 
   // (Device reconnection is now owned by the gateway daemon; the browser client
   // auto-reattaches its WebSocket. No browser-side Web Serial reconnect needed.)
