@@ -26,7 +26,7 @@ export const DEFAULT_CONTROLS: ArtControls = {
   invert: false,
   contrast: 1,
   samplingMm: 0.2,
-  detail: 0.6,
+  detail: 1,
 };
 
 /** Source-stage keys — changing one re-derives the master (debounced). */
@@ -52,7 +52,7 @@ export const CONTROL_RANGES: Record<
   threshold: { min: 0.05, max: 0.95, step: 0.01 },
   levels: { min: 1, max: 6, step: 1 },
   contrast: { min: 0.5, max: 3, step: 0.05 },
-  samplingMm: { min: 0.1, max: 3, step: 0.05 },
+  samplingMm: { min: 0.01, max: 3, step: 0.01 },
   detail: { min: 0, max: 1, step: 0.01 },
 };
 
