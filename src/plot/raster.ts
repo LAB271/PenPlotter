@@ -118,16 +118,6 @@ export function traceField(src: FieldSource, opts: RasterOptions): ImportResult 
   return { artwork: { polylines, widthMm, heightMm }, skipped };
 }
 
-/**
- * Convert a raster image into plottable polylines: decode to a grayscale field,
- * then trace it. The geometry "looks like a drawing" — closed outlines of the
- * dark regions, which a pen plotter can draw efficiently.
- */
-export async function flattenImageFile(file: File, opts: RasterOptions): Promise<ImportResult> {
-  const src = await imageToField(file, opts.maxDim ?? 500);
-  return traceField(src, opts);
-}
-
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
