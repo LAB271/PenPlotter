@@ -588,5 +588,3 @@ function stripComment(line: string): string {
     .replace(/;.*$/, '')
     .trim();
 }
-
-
