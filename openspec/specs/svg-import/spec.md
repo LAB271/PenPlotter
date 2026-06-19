@@ -3,9 +3,7 @@
 ## Purpose
 
 Load SVG files in the browser and flatten their stroke geometry into polylines sized in real-world millimeters, ready for placement and plotting. Fill-based geometry is out of scope and operators are guided toward PNG import for those cases.
-
 ## Requirements
-
 ### Requirement: Load an SVG file
 
 The system SHALL let the operator load an SVG file from disk and parse it in the browser without uploading it to any server.
@@ -22,12 +20,17 @@ The system SHALL let the operator load an SVG file from disk and parse it in the
 
 ### Requirement: Flatten geometry to polylines
 
-The system SHALL convert the SVG's stroke geometry into polylines (sequences of straight segments), flattening curves and arcs at a configurable tolerance expressed in millimeters. It MUST bake in element transforms so nested/grouped geometry is positioned correctly.
+The system SHALL convert the SVG's stroke geometry into polylines (sequences of straight segments), flattening curves and arcs at a tolerance expressed in millimeters. This tolerance SHALL be an **operator-controlled, live, per-artwork** setting (a sampling/smoothness control) rather than a fixed import-time constant: changing it re-flattens the placed SVG in place and updates the preview without re-importing, and each placed SVG carries and persists its own value. It MUST bake in element transforms so nested/grouped geometry is positioned correctly.
 
 #### Scenario: Curves are flattened within tolerance
 
 - **WHEN** an SVG contains Bézier/arc paths
 - **THEN** they are sampled into polylines whose deviation from the true curve is within the configured tolerance
+
+#### Scenario: Adjusting sampling re-flattens live
+
+- **WHEN** the operator changes the sampling tolerance of a placed SVG artwork
+- **THEN** the SVG re-flattens at the new tolerance (finer or coarser) and the preview updates without re-importing the file
 
 #### Scenario: Nested transforms are applied
 
@@ -61,3 +64,4 @@ The system SHALL treat strokes/outlines as the drawable geometry for this change
 
 - **WHEN** an SVG has no usable stroke geometry (e.g. a potrace-style fill-only trace)
 - **THEN** the app reports that the SVG is fill-based and suggests exporting/importing it as a PNG (which is traced into outlines), rather than failing silently
+
