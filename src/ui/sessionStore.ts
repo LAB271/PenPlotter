@@ -1,13 +1,18 @@
 import type { Placement, Polyline } from '../plot/types';
+import type { ArtControls } from '../plot/controls';
 
 /** A placed artwork as persisted (matches App's PlacedArt). */
 export interface PersistedArt {
   id: string;
   name: string;
+  /** 'svg' | 'png' — which source-stage controls apply (optional for old sessions). */
+  kind?: 'svg' | 'png';
   master: Polyline[];
   widthMm: number;
   heightMm: number;
   placement: Placement;
+  /** Per-artwork drawing controls (optional for sessions saved before they existed). */
+  controls?: ArtControls;
 }
 
 /**

@@ -1,37 +1,37 @@
 ## 1. Source-retaining trace pipeline (PNG)
 
-- [ ] 1.1 Split `raster.ts`: a step that decodes the image to a reusable grayscale `Float32Array` field (at `MASTER_MAXDIM`), and a separate `traceField(field, opts)` that runs iso-contours → polylines. Re-tracing reuses the cached field (no re-decode)
-- [ ] 1.2 Add invert + contrast transforms on the field before tracing (cheap point ops); unit-test field transforms and that re-trace at new threshold/levels matches a fresh import
-- [ ] 1.3 Keep `flattenImageFile` working (compose the two steps) for first import
+- [x] 1.1 Split `raster.ts`: `imageToField` decodes to a reusable grayscale `Float32Array` field (at `MASTER_MAXDIM`); `traceField(field, opts)` runs iso-contours → polylines. Live re-tracing reuses the cached field (no re-decode)
+- [x] 1.2 Add invert + contrast transforms on the field before tracing (`adjustValue`, applied to a copy so the source field is never mutated); unit-tested in `raster.test.ts` (invert flips a light-on-dark source to the dark-on-light trace; contrast clamps; deterministic re-trace)
+- [x] 1.3 Keep `flattenImageFile` working — now composes `imageToField` + `traceField`
 
 ## 2. Re-flattenable SVG
 
-- [ ] 2.1 Retain SVG text per artwork; allow re-running `flattenSvg(text, tolerance)` at a chosen tolerance to produce a fresh master
-- [ ] 2.2 Unit-test that a coarser/finer tolerance yields fewer/more points within deviation bounds
+- [x] 2.1 Retain SVG text per artwork (in-memory `sourcesRef`); `deriveMaster` re-runs `flattenSvg(text, samplingMm)` at the artwork's chosen tolerance to produce a fresh master
+- [~] 2.2 Coarser/finer tolerance → fewer/more points: NOT a unit test here — `flattenSvg` needs the DOM `getPointAtLength`, and tests run in Node (no DOM). Covered by runtime verification 6.2 instead
 
 ## 3. Geometry controls surfaced
 
-- [ ] 3.1 Expose simplify tolerance + minimum stroke length from `detail.ts` as direct controls (reuse `applyDetail` logic); keep the existing `detail` slider working
-- [ ] 3.2 Unit-test the direct knobs against the existing detail mapping
+- [~] 3.1 DEVIATION (kept simple): `detail.ts` already maps the single `detail` slider to BOTH a simplify tolerance and a min-stroke-length (`detailParams`). Exposing separate simplify + min-stroke sliders would drive the same two knobs and confuse the UI, so the geometry stage keeps one per-artwork **Detail / smoothing** slider. Suggest updating the spec/proposal to match.
+- [~] 3.2 Folded into 3.1 — existing `detail.test.ts` still covers the detail→(epsilon, minLen) mapping; no separate knobs added
 
 ## 4. Per-artwork model + persistence
 
-- [ ] 4.1 Extend `PlacedArt` to carry its source (SVG text / grayscale field) and per-artwork control values; seed PNG defaults from current calibration
-- [ ] 4.2 Persist per-artwork control values in `sessionStore`; persist source best-effort and degrade gracefully (disable source controls, keep master) when over quota
-- [ ] 4.3 Migration: sessions without control values load with defaults
+- [x] 4.1 `PlacedArt` carries `kind` + `controls`; source kept in `sourcesRef` (in memory); PNG control defaults seeded from `cal.pngThreshold/pngLevels`
+- [~] 4.2 Per-artwork control values persist via `sessionStore` (and migrate). DEVIATION: the raw source is held in memory only, never persisted (a PNG field is ~MBs) — so after a reload the master + values are kept but source-stage controls are disabled until re-import (the "degrade gracefully" path, always taken rather than quota-gated)
+- [x] 4.3 Migration: `normalizeArt` + `normalizeControls` fill `kind`/`controls` defaults for sessions saved before they existed
 
 ## 5. Live UI
 
-- [ ] 5.1 Reusable slider-with-number control (drag or type; configurable `min`/`max`/`step`); centralise ranges/defaults
-- [ ] 5.2 Drawing-controls panel bound to the selected artwork: PNG (threshold, levels, invert, contrast), SVG (sampling tolerance), shared (detail, simplify, min stroke length)
-- [ ] 5.3 Debounce source re-derivation (~150–250 ms); keep geometry controls + canvas redraw immediate; show an "updating…" affordance during the debounce
-- [ ] 5.4 Drive both the canvas preview and the plotted geometry from the same result
-- [ ] 5.5 Lock placement + all drawing controls while a plot is active (gate on the existing plot lifecycle: lock on plot start, unlock on streamComplete / stop / streamAborted)
+- [x] 5.1 Reusable `Slider` (range + numeric box; drag or type an exact value, box accepts values beyond the slider range); ranges/defaults centralised in `src/plot/controls.ts`
+- [x] 5.2 "Drawing controls" panel bound to the selected artwork: PNG (threshold, levels, invert, contrast), SVG (sampling tolerance), shared (Detail / smoothing)
+- [x] 5.3 Source re-derivation debounced 200 ms with an "updating…" affordance; geometry (detail) + canvas redraw stay immediate
+- [x] 5.4 `displayItems` drives both the canvas preview and the plotted geometry from the same result
+- [x] 5.5 Lock placement + all drawing controls while a plot is active: `plotting` state set on plot start, cleared on streamComplete / streamAborted (covers stop) / disconnect; `PlotCanvas` gains a `locked` prop (no drag, no transformer)
 
 ## 6. Verification
 
-- [ ] 6.1 Adjust PNG threshold/levels/invert/contrast on a placed image → preview updates live, no re-import
-- [ ] 6.2 Adjust SVG sampling tolerance on a placed SVG → re-flattens live
-- [ ] 6.3 Two artworks tuned independently; reload session → values restored
-- [ ] 6.4 Start a plot → controls + placement lock; stop/complete → they unlock
+- [ ] 6.1 Adjust PNG threshold/levels/invert/contrast on a placed image → preview updates live, no re-import (run the app — visual)
+- [ ] 6.2 Adjust SVG sampling tolerance on a placed SVG → re-flattens live (run the app — visual)
+- [ ] 6.3 Two artworks tuned independently; reload session → values restored (run the app)
+- [ ] 6.4 Start a plot → controls + placement lock; stop/complete → they unlock (run the app)
 - [ ] 6.5 ⚙ HARDWARE: plot a tuned PNG and a tuned SVG → confirm the pen output matches the tuned preview

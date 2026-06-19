@@ -3,14 +3,21 @@ import { GatewayClient } from '../transport/GatewayClient';
 import { Calibration } from '../grbl/settings';
 import { StatusReport } from '../grbl/types';
 import { loadCalibration, saveCalibration } from './calibrationStore';
-import { loadSession, saveSession, type Session } from './sessionStore';
+import { loadSession, saveSession, type Session, type PersistedArt } from './sessionStore';
 import { flattenSvg } from '../plot/svg';
-import { flattenImageFile } from '../plot/raster';
+import { imageToField, traceField, type FieldSource } from '../plot/raster';
 import { applyDetail } from '../plot/detail';
 import { generateGcode } from '../plot/gcode';
 import { anchorPlacement, bounds, fitPlacement, placePolylines } from '../plot/place';
 import { PAPER_SIZES, paperDims } from '../plot/paper';
 import type { Artwork, Placement, Polyline } from '../plot/types';
+import {
+  type ArtControls,
+  DEFAULT_CONTROLS,
+  CONTROL_RANGES,
+  SOURCE_KEYS,
+  normalizeControls,
+} from '../plot/controls';
 import { PlotCanvas } from './PlotCanvas';
 
 type Orientation = 'landscape' | 'portrait';
@@ -26,15 +33,27 @@ const STALL_MS = 20000;
 // (status normally arrives ~10×/s, so multi-second silence means it's gone).
 const LINK_DEAD_MS = 5000;
 
+/** The retained source of an artwork, kept in memory so source controls can
+ * re-derive the master live (not persisted — large, and the master is saved). */
+type ArtSource = { kind: 'svg'; text: string } | { kind: 'png'; field: FieldSource };
+
 /** An artwork placed on the page (multiple may share the paper). */
 interface PlacedArt {
   id: string;
   name: string;
+  kind: 'svg' | 'png';
   /** Full-detail flattened polylines (paper-mm, normalized to origin). */
   master: Polyline[];
   widthMm: number;
   heightMm: number;
   placement: Placement;
+  /** Per-artwork drawing controls. */
+  controls: ArtControls;
+}
+
+/** Fill kind/controls defaults so sessions saved before they existed still load. */
+function normalizeArt(p: PersistedArt): PlacedArt {
+  return { ...p, kind: p.kind ?? 'svg', controls: normalizeControls(p.controls) };
 }
 
 export function App() {
@@ -90,9 +109,19 @@ export function App() {
   const [restored] = useState(loadSession);
 
   const [jogStep, setJogStep] = useState(10);
-  const [items, setItems] = useState<PlacedArt[]>(() => restored?.items ?? []);
+  const [items, setItems] = useState<PlacedArt[]>(() => (restored?.items ?? []).map(normalizeArt));
   const [selectedId, setSelectedId] = useState<string | null>(restored?.selectedId ?? null);
   const idRef = useRef(restored?.nextId ?? 0);
+  // Retained sources (in memory only) keyed by artwork id, so source controls can
+  // re-derive the master without re-importing. Absent after a reload (master kept).
+  const sourcesRef = useRef(new Map<string, ArtSource>());
+  // Latest items, for the debounced re-derivation to read current controls.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const deriveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  // True while a plot is streaming — locks placement + drawing controls.
+  const [plotting, setPlotting] = useState(false);
   // Don't push to the daemon until we've synced with its stored session on connect
   // (avoids a stale local push overwriting a newer session from another device).
   const sessionLoadedRef = useRef(false);
@@ -121,6 +150,7 @@ export function App() {
         setProgress(null);
         heldRef.current = false; // stop any in-progress press-and-hold jog loop
         plottingRef.current = false;
+        setPlotting(false);
         pushLog('SYS', 'disconnected');
       }),
       ctrl.on('status', (s) => {
@@ -171,6 +201,7 @@ export function App() {
       }),
       ctrl.on('streamComplete', () => {
         plottingRef.current = false;
+        setPlotting(false);
         setProgress(null);
         setProgressFrac(1);
         setAlert('Plot complete.');
@@ -178,6 +209,7 @@ export function App() {
       }),
       ctrl.on('streamAborted', (e) => {
         plottingRef.current = false;
+        setPlotting(false);
         setProgress(null);
         setAlert(`Stream aborted: ${e.reason}`);
         pushLog('ABORT', e.reason);
@@ -191,7 +223,7 @@ export function App() {
         // any device sees the current drawing. (null = daemon has none yet.)
         const s = data as Session | null;
         if (s && Array.isArray(s.items)) {
-          setItems(s.items as PlacedArt[]);
+          setItems((s.items as PersistedArt[]).map(normalizeArt));
           setSelectedId(s.selectedId ?? null);
           if (typeof s.nextId === 'number') idRef.current = Math.max(idRef.current, s.nextId);
           if (typeof s.paperIdx === 'number') setPaperIdx(s.paperIdx);
@@ -324,12 +356,28 @@ export function App() {
     ctrl()?.jogCancel();
   }
 
-  function addArtwork(name: string, art: Artwork) {
+  function addArtwork(
+    name: string,
+    kind: 'svg' | 'png',
+    art: Artwork,
+    controls: ArtControls,
+    source: ArtSource,
+  ) {
     const id = `art${++idRef.current}`;
+    sourcesRef.current.set(id, source);
     const placement = fitPlacement(art.widthMm, art.heightMm, 0, paper.widthMm, paper.heightMm);
     setItems((list) => [
       ...list,
-      { id, name, master: art.polylines, widthMm: art.widthMm, heightMm: art.heightMm, placement },
+      {
+        id,
+        name,
+        kind,
+        master: art.polylines,
+        widthMm: art.widthMm,
+        heightMm: art.heightMm,
+        placement,
+        controls,
+      },
     ]);
     setSelectedId(id);
   }
@@ -340,7 +388,8 @@ export function App() {
     if (!file) return;
     try {
       const text = await file.text();
-      const { artwork: art, skipped } = flattenSvg(text, MASTER_TOLERANCE_MM);
+      const controls: ArtControls = { ...DEFAULT_CONTROLS, samplingMm: MASTER_TOLERANCE_MM };
+      const { artwork: art, skipped } = flattenSvg(text, controls.samplingMm);
       if (art.polylines.length === 0) {
         setAlert(
           'No plottable stroke geometry in that SVG (it is likely fill-based). ' +
@@ -348,7 +397,7 @@ export function App() {
         );
         return;
       }
-      addArtwork(file.name, art);
+      addArtwork(file.name, 'svg', art, controls, { kind: 'svg', text });
       setAlert(
         skipped > 0
           ? `Imported. ${skipped} element(s) skipped (hidden layers, fills, or text).`
@@ -365,17 +414,24 @@ export function App() {
     if (!file) return;
     setAlert('Tracing image…');
     try {
-      const { artwork: art } = await flattenImageFile(file, {
+      const field = await imageToField(file, MASTER_MAXDIM);
+      const controls: ArtControls = {
+        ...DEFAULT_CONTROLS,
         threshold: cal.pngThreshold,
         levels: cal.pngLevels,
+      };
+      const { artwork: art } = traceField(field, {
+        threshold: controls.threshold,
+        levels: controls.levels,
+        invert: controls.invert,
+        contrast: controls.contrast,
         toleranceMm: MASTER_TOLERANCE_MM,
-        maxDim: MASTER_MAXDIM,
       });
       if (art.polylines.length === 0) {
         setAlert('No contours found — try a higher threshold or a higher-contrast image.');
         return;
       }
-      addArtwork(file.name, art);
+      addArtwork(file.name, 'png', art, controls, { kind: 'png', field });
       setAlert('');
     } catch (err) {
       setAlert(String((err as Error).message ?? err));
@@ -383,25 +439,80 @@ export function App() {
   }
 
   const selectedItem = items.find((i) => i.id === selectedId) ?? null;
+  // Source-stage controls are disabled while plotting (locked) or when the source
+  // wasn't retained (after a reload — the master is kept, geometry controls still work).
+  const sourceAvailable = !!selectedItem && sourcesRef.current.has(selectedItem.id);
+  const srcLocked = !selectedItem || plotting || !sourceAvailable;
 
-  // Apply the detail slider to each master → what is previewed and plotted.
+  // Apply each artwork's detail control to its master → what is previewed and plotted.
   const displayItems = useMemo(
     () =>
       items.map((i) => ({
         id: i.id,
-        polylines: applyDetail(i.master, cal.detail),
+        polylines: applyDetail(i.master, i.controls.detail),
         placement: i.placement,
         w: i.widthMm,
         h: i.heightMm,
       })),
-    [items, cal.detail],
+    [items],
   );
   const selectedStrokes = displayItems.find((d) => d.id === selectedId)?.polylines.length ?? 0;
 
   const updatePlacement = useCallback((id: string, pl: Placement) => {
     setItems((list) => list.map((i) => (i.id === id ? { ...i, placement: pl } : i)));
   }, []);
+
+  // Re-derive an artwork's master from its retained source at its current controls.
+  // Expensive (re-trace / re-flatten) — called debounced from scheduleDerive.
+  function deriveMaster(id: string) {
+    const src = sourcesRef.current.get(id);
+    const it = itemsRef.current.find((i) => i.id === id);
+    if (!src || !it) return;
+    try {
+      const c = it.controls;
+      const art =
+        src.kind === 'svg'
+          ? flattenSvg(src.text, c.samplingMm).artwork
+          : traceField(src.field, {
+              threshold: c.threshold,
+              levels: c.levels,
+              invert: c.invert,
+              contrast: c.contrast,
+              toleranceMm: MASTER_TOLERANCE_MM,
+            }).artwork;
+      setItems((list) =>
+        list.map((i) =>
+          i.id === id
+            ? { ...i, master: art.polylines, widthMm: art.widthMm, heightMm: art.heightMm }
+            : i,
+        ),
+      );
+    } catch (e) {
+      setAlert(String((e as Error).message ?? e));
+    }
+  }
+
+  function scheduleDerive(id: string) {
+    if (!sourcesRef.current.has(id)) return; // source dropped (e.g. after a reload)
+    setUpdatingId(id);
+    if (deriveTimer.current) clearTimeout(deriveTimer.current);
+    deriveTimer.current = setTimeout(() => {
+      deriveMaster(id);
+      setUpdatingId(null);
+    }, 200);
+  }
+
+  // Update one control. Source-stage changes re-derive the master (debounced);
+  // geometry-stage changes (detail) just re-thin the cached master, immediately.
+  function setControl<K extends keyof ArtControls>(id: string, key: K, value: ArtControls[K]) {
+    setItems((list) =>
+      list.map((i) => (i.id === id ? { ...i, controls: { ...i.controls, [key]: value } } : i)),
+    );
+    if ((SOURCE_KEYS as string[]).includes(key as string)) scheduleDerive(id);
+  }
+
   function removeItem(id: string) {
+    sourcesRef.current.delete(id);
     setItems((list) => list.filter((i) => i.id !== id));
     setSelectedId((sel) => (sel === id ? null : sel));
   }
@@ -457,6 +568,7 @@ export function App() {
     traveledRef.current = 0;
     lastMposRef.current = null;
     plottingRef.current = true;
+    setPlotting(true);
     pausedRef.current = false;
     ackedRef.current = 0;
     totalRef.current = gc.length;
@@ -617,25 +729,6 @@ export function App() {
                 {selectedItem.placement.rotation.toFixed(0)}°
               </p>
             )}
-
-            <label className="mt-3 block">
-              <div className="flex items-center justify-between text-xs text-slate-600">
-                <span>Detail</span>
-                <span className="text-slate-400">{Math.round(cal.detail * 100)}%</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={Math.round(cal.detail * 100)}
-                onChange={(e) => setCal((p) => ({ ...p, detail: Number(e.target.value) / 100 }))}
-                className="mt-1 w-full"
-              />
-              <div className="flex justify-between text-[10px] text-slate-400">
-                <span>Simpler / faster</span>
-                <span>Detailed / slower</span>
-              </div>
-            </label>
           </Section>
 
           <Section title="Jog">
@@ -700,6 +793,7 @@ export function App() {
               onSelect={setSelectedId}
               onPlacement={updatePlacement}
               penPos={penPos}
+              locked={plotting}
             />
           )}
           {items.length === 0 && (
@@ -787,23 +881,74 @@ export function App() {
             />
           </Section>
 
-          <Section title="PNG tracing">
-            <p className="mb-1.5 text-xs text-slate-500">
-              Applied on the next PNG you add. Threshold 0–1 (higher = more ink); levels &gt; 1 add
-              tonal shading.
-            </p>
-            <NumberField
-              label="Threshold"
-              value={cal.pngThreshold}
-              step={0.05}
-              onChange={setCalField('pngThreshold')}
-            />
-            <NumberField
-              label="Levels"
-              value={cal.pngLevels}
-              step={1}
-              onChange={setCalField('pngLevels')}
-            />
+          <Section title="Drawing controls">
+            {!selectedItem && (
+              <p className="text-xs text-slate-500">Select an artwork to fine-tune its look.</p>
+            )}
+            {selectedItem && (
+              <>
+                {plotting && (
+                  <p className="mb-1.5 text-xs text-amber-600">Locked while plotting.</p>
+                )}
+                {!plotting && !sourceAvailable && (
+                  <p className="mb-1.5 text-xs text-slate-500">
+                    Re-import to re-tune source controls (the current look is kept).
+                  </p>
+                )}
+                {selectedItem.kind === 'png' ? (
+                  <>
+                    <Slider
+                      label="Threshold"
+                      value={selectedItem.controls.threshold}
+                      {...CONTROL_RANGES.threshold}
+                      disabled={srcLocked}
+                      onChange={(v) => setControl(selectedItem.id, 'threshold', v)}
+                    />
+                    <Slider
+                      label="Levels"
+                      value={selectedItem.controls.levels}
+                      {...CONTROL_RANGES.levels}
+                      disabled={srcLocked}
+                      onChange={(v) => setControl(selectedItem.id, 'levels', v)}
+                    />
+                    <label className="mb-2 flex items-center justify-between text-xs text-slate-600">
+                      <span>Invert</span>
+                      <input
+                        type="checkbox"
+                        checked={selectedItem.controls.invert}
+                        disabled={srcLocked}
+                        onChange={(e) => setControl(selectedItem.id, 'invert', e.target.checked)}
+                      />
+                    </label>
+                    <Slider
+                      label="Contrast"
+                      value={selectedItem.controls.contrast}
+                      {...CONTROL_RANGES.contrast}
+                      disabled={srcLocked}
+                      onChange={(v) => setControl(selectedItem.id, 'contrast', v)}
+                    />
+                  </>
+                ) : (
+                  <Slider
+                    label="Sampling (mm)"
+                    value={selectedItem.controls.samplingMm}
+                    {...CONTROL_RANGES.samplingMm}
+                    disabled={srcLocked}
+                    onChange={(v) => setControl(selectedItem.id, 'samplingMm', v)}
+                  />
+                )}
+                <Slider
+                  label="Detail / smoothing"
+                  value={selectedItem.controls.detail}
+                  {...CONTROL_RANGES.detail}
+                  disabled={plotting}
+                  onChange={(v) => setControl(selectedItem.id, 'detail', v)}
+                />
+                <p className="mt-1 text-[10px] text-slate-400">
+                  {selectedStrokes} strokes{updatingId === selectedItem.id ? ' · updating…' : ''}
+                </p>
+              </>
+            )}
           </Section>
         </aside>
       </div>
@@ -968,6 +1113,45 @@ function NumberField(props: {
         value={props.value}
         step={props.step ?? 1}
         onChange={(e) => props.onChange(Number(e.target.value))}
+      />
+    </label>
+  );
+}
+
+/** A labelled slider with a numeric box — drag for quick changes or type an exact
+ * value (the box accepts values beyond the slider's nominal range). */
+function Slider(props: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  disabled?: boolean;
+  onChange: (v: number) => void;
+}) {
+  const { label, value, min, max, step, disabled, onChange } = props;
+  return (
+    <label className="mb-2 block">
+      <div className="flex items-center justify-between text-xs text-slate-600">
+        <span>{label}</span>
+        <input
+          type="number"
+          className={`${field} w-16`}
+          value={value}
+          step={step}
+          disabled={disabled}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 w-full"
       />
     </label>
   );

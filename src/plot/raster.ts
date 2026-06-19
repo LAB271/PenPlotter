@@ -14,6 +14,10 @@ export interface RasterOptions {
   threshold: number;
   /** Number of evenly-spaced brightness contours (1 = silhouette outline, more = tonal). */
   levels: number;
+  /** Invert dark/light before tracing. */
+  invert?: boolean;
+  /** Contrast multiplier around mid-grey (1 = unchanged). */
+  contrast?: number;
   /** Polyline simplification tolerance, mm. */
   toleranceMm: number;
   /** Working-resolution cap on the longer side (px) to keep contours smooth/fast. */
@@ -21,16 +25,27 @@ export interface RasterOptions {
 }
 
 /**
- * Convert a raster image into plottable polylines by tracing grayscale
- * iso-contours (marching squares). Browser-only: rasterizes the image on a
- * canvas to read pixels. The geometry "looks like a drawing" — closed outlines
- * of the dark regions, which a pen plotter can draw efficiently.
+ * The decoded grayscale of an image, kept so the trace can be re-run live at new
+ * threshold/levels/invert/contrast without re-decoding the file.
  */
-export async function flattenImageFile(file: File, opts: RasterOptions): Promise<ImportResult> {
+export interface FieldSource {
+  /** Grayscale field in 0..1 (0 = black, 1 = white), row-major gw×gh. */
+  field: Float32Array;
+  gw: number;
+  gh: number;
+  /** mm per grid cell, so traced contours come out in real-world mm. */
+  mmPerGrid: number;
+}
+
+/**
+ * Decode an image to a reusable grayscale field (browser-only: rasterizes on a
+ * canvas to read pixels). Separated from tracing so the field can be re-traced
+ * live as the controls change.
+ */
+export async function imageToField(file: File, maxDim = 500): Promise<FieldSource> {
   const url = URL.createObjectURL(file);
   try {
     const img = await loadImage(url);
-    const maxDim = opts.maxDim ?? 500;
     const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
     const gw = Math.max(2, Math.round(img.width * scale));
     const gh = Math.max(2, Math.round(img.height * scale));
@@ -45,7 +60,6 @@ export async function flattenImageFile(file: File, opts: RasterOptions): Promise
     ctx.drawImage(img, 0, 0, gw, gh);
     const { data } = ctx.getImageData(0, 0, gw, gh);
 
-    // Grayscale field in 0..1 (0 = black, 1 = white).
     const field = new Float32Array(gw * gh);
     for (let i = 0; i < gw * gh; i++) {
       const r = data[i * 4],
@@ -54,31 +68,64 @@ export async function flattenImageFile(file: File, opts: RasterOptions): Promise
       field[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     }
 
-    const mmPerGrid = (img.width * PX_TO_MM) / gw;
-    const levels = Math.max(1, Math.round(opts.levels));
-    const t = Math.min(0.999, Math.max(0.001, opts.threshold));
-    const polylines: Polyline[] = [];
-    let skipped = 0;
-
-    for (let k = 1; k <= levels; k++) {
-      const value = (t * k) / levels; // light → threshold; nested for shading
-      const contours = isoContours(field, gw, gh, value);
-      if (contours.length === 0) {
-        skipped++;
-        continue;
-      }
-      for (const c of contours) {
-        const mm = c.map((p) => ({ x: p.x * mmPerGrid, y: p.y * mmPerGrid }));
-        const simplified = simplifyPolyline(mm, opts.toleranceMm);
-        if (simplified.length >= 2) polylines.push(simplified);
-      }
-    }
-
-    const { widthMm, heightMm } = normalizeToOrigin(polylines);
-    return { artwork: { polylines, widthMm, heightMm }, skipped };
+    return { field, gw, gh, mmPerGrid: (img.width * PX_TO_MM) / gw };
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Apply invert + contrast (around mid-grey) to a grayscale value, clamped to 0..1. */
+export function adjustValue(v: number, invert: boolean, contrast: number): number {
+  const g = invert ? 1 - v : v;
+  const c = (g - 0.5) * contrast + 0.5;
+  return c < 0 ? 0 : c > 1 ? 1 : c;
+}
+
+/**
+ * Trace a decoded field into plottable polylines (pure — no DOM, unit-testable).
+ * Applies invert/contrast, then traces brightness iso-contours (marching squares)
+ * at the threshold (nested for tonal shading), and returns mm-sized geometry.
+ */
+export function traceField(src: FieldSource, opts: RasterOptions): ImportResult {
+  const { gw, gh, mmPerGrid } = src;
+  const invert = opts.invert ?? false;
+  const contrast = opts.contrast ?? 1;
+  const adjusted =
+    invert || contrast !== 1
+      ? Float32Array.from(src.field, (v) => adjustValue(v, invert, contrast))
+      : src.field;
+
+  const levels = Math.max(1, Math.round(opts.levels));
+  const t = Math.min(0.999, Math.max(0.001, opts.threshold));
+  const polylines: Polyline[] = [];
+  let skipped = 0;
+
+  for (let k = 1; k <= levels; k++) {
+    const value = (t * k) / levels; // light → threshold; nested for shading
+    const contours = isoContours(adjusted, gw, gh, value);
+    if (contours.length === 0) {
+      skipped++;
+      continue;
+    }
+    for (const c of contours) {
+      const mm = c.map((p) => ({ x: p.x * mmPerGrid, y: p.y * mmPerGrid }));
+      const simplified = simplifyPolyline(mm, opts.toleranceMm);
+      if (simplified.length >= 2) polylines.push(simplified);
+    }
+  }
+
+  const { widthMm, heightMm } = normalizeToOrigin(polylines);
+  return { artwork: { polylines, widthMm, heightMm }, skipped };
+}
+
+/**
+ * Convert a raster image into plottable polylines: decode to a grayscale field,
+ * then trace it. The geometry "looks like a drawing" — closed outlines of the
+ * dark regions, which a pen plotter can draw efficiently.
+ */
+export async function flattenImageFile(file: File, opts: RasterOptions): Promise<ImportResult> {
+  const src = await imageToField(file, opts.maxDim ?? 500);
+  return traceField(src, opts);
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {

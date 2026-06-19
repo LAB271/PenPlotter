@@ -24,6 +24,8 @@ interface Props {
   onSelect: (id: string | null) => void;
   onPlacement: (id: string, p: Placement) => void;
   penPos: Point | null;
+  /** When true (e.g. a plot is running), artwork can't be dragged/transformed. */
+  locked?: boolean;
 }
 
 export function PlotCanvas(props: Props) {
@@ -39,6 +41,7 @@ export function PlotCanvas(props: Props) {
     penPos,
     onSelect,
     onPlacement,
+    locked = false,
   } = props;
   const margin = 64; // px clearance around the bed so transform handles stay reachable
   const pxPerMm = Math.max(
@@ -61,7 +64,7 @@ export function PlotCanvas(props: Props) {
     const node = selectedId ? nodeRefs.current.get(selectedId) : null;
     tr.nodes(node ? [node] : []);
     tr.getLayer()?.batchDraw();
-  }, [selectedId, artworks]);
+  }, [selectedId, artworks, locked]);
 
   // Memoize the artwork nodes so the high-frequency pen-position / connection
   // re-renders produce the SAME element references — react-konva then leaves the
@@ -80,7 +83,7 @@ export function PlotCanvas(props: Props) {
           scaleX={a.placement.scale}
           scaleY={a.placement.scale}
           rotation={a.placement.rotation}
-          draggable
+          draggable={!locked}
           onClick={() => onSelect(a.id)}
           onTap={() => onSelect(a.id)}
           onDragEnd={(e) => onPlacement(a.id, { ...a.placement, x: e.target.x(), y: e.target.y() })}
@@ -104,7 +107,7 @@ export function PlotCanvas(props: Props) {
           ))}
         </Group>
       )),
-    [artworks, selectedId, onSelect, onPlacement, registerNode],
+    [artworks, selectedId, onSelect, onPlacement, registerNode, locked],
   );
 
   return (
@@ -154,7 +157,9 @@ export function PlotCanvas(props: Props) {
           />
           {artNodes}
         </Group>
-        {selectedId && <Transformer ref={trRef} rotateEnabled keepRatio flipEnabled={false} />}
+        {selectedId && !locked && (
+          <Transformer ref={trRef} rotateEnabled keepRatio flipEnabled={false} />
+        )}
       </Layer>
 
       {/* Marker layer: only this redraws as the pen moves (live). */}
