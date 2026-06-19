@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFileSync, writeFileSync, renameSync, openSync, fsyncSync, closeSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -62,16 +62,24 @@ function persistState(sync = false) {
   lastSavedKey = key;
   const data: SavedState = { wpos: lastWpos, wco: lastWco, savedAt: new Date().toISOString() };
   const json = JSON.stringify(data, null, 2);
+  // Write atomically (temp file + rename) so an abrupt power-off can never leave a
+  // half-written/empty file — a corrupt file reads back as null and loses the home.
+  const tmp = `${STATE_FILE}.tmp`;
   if (sync) {
     try {
-      writeFileSync(STATE_FILE, json);
+      writeFileSync(tmp, json);
+      const fd = openSync(tmp, 'r'); // fsync the data to disk before the rename
+      fsyncSync(fd);
+      closeSync(fd);
+      renameSync(tmp, STATE_FILE);
     } catch {
       /* ignore */
     }
     return;
   }
   writing = true;
-  void writeFile(STATE_FILE, json)
+  void writeFile(tmp, json)
+    .then(() => rename(tmp, STATE_FILE))
     .catch(() => undefined)
     .finally(() => {
       writing = false;
@@ -148,6 +156,11 @@ ctrl.on('connected', (e) => {
 ctrl.on('disconnected', () => {
   connected = false;
   if (posReady) persistState(true); // flush the freshest position at power-off time
+  // Stop persisting until the next restore. If the plotter power-cycled, it
+  // reconnects reporting mpos=0 with a stale WCO; persisting that bogus position
+  // (~5 Hz status) would overwrite the saved home before restoreSavedPosition()
+  // can read it. restoreSavedPosition re-enables posReady once the origin is back.
+  posReady = false;
   lastStatus = null;
   log('plotter disconnected');
   fwd('disconnected')(undefined);
