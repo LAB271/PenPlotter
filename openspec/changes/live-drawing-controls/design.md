@@ -40,6 +40,9 @@ Controls now retune an artwork *in place*, so the values must travel with the ar
 ### Sliders with typeable, configurable values
 A small reusable control: a range slider plus a numeric box bound to the same value, with `min`/`max`/`step` props. Drag or type; typing accepts exact values. "Customisable values" = the ranges are defined centrally (in settings/defaults) and the numeric box lets the operator exceed the slider's comfortable range when needed. Look controls are sliders; speed/feeds stay number fields (mobile change).
 
+### Lock controls while a plot runs
+Live re-derivation and a running plot must not overlap: the plot streams G-code generated from the current display geometry, so letting a control (or placement) change mid-plot would desync what's drawn from what's on screen. When a plot starts, the artwork and all drawing controls become read-only; they re-enable on `streamComplete` / stop / `streamAborted`. This reuses the existing plot lifecycle the UI already tracks (`plottingRef`, the stream events) — no new state machine, just gating the controls on "is a plot active." It also matches the operator's mental model: tune freely, then commit, then it's locked until done.
+
 ### Debounce the expensive stage only
 Source-control changes schedule a debounced re-derivation (e.g. ~150–250 ms after the last change) so dragging a slider doesn't fire a re-trace per pixel; the cheap geometry stage and the canvas redraw stay immediate. The preview shows the latest derived master; a subtle "updating…" affordance covers the debounce gap.
 

@@ -26,10 +26,12 @@
 - [ ] 5.2 Drawing-controls panel bound to the selected artwork: PNG (threshold, levels, invert, contrast), SVG (sampling tolerance), shared (detail, simplify, min stroke length)
 - [ ] 5.3 Debounce source re-derivation (~150–250 ms); keep geometry controls + canvas redraw immediate; show an "updating…" affordance during the debounce
 - [ ] 5.4 Drive both the canvas preview and the plotted geometry from the same result
+- [ ] 5.5 Lock placement + all drawing controls while a plot is active (gate on the existing plot lifecycle: lock on plot start, unlock on streamComplete / stop / streamAborted)
 
 ## 6. Verification
 
 - [ ] 6.1 Adjust PNG threshold/levels/invert/contrast on a placed image → preview updates live, no re-import
 - [ ] 6.2 Adjust SVG sampling tolerance on a placed SVG → re-flattens live
 - [ ] 6.3 Two artworks tuned independently; reload session → values restored
-- [ ] 6.4 ⚙ HARDWARE: plot a tuned PNG and a tuned SVG → confirm the pen output matches the tuned preview
+- [ ] 6.4 Start a plot → controls + placement lock; stop/complete → they unlock
+- [ ] 6.5 ⚙ HARDWARE: plot a tuned PNG and a tuned SVG → confirm the pen output matches the tuned preview

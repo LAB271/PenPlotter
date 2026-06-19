@@ -32,6 +32,20 @@ Drawing-look controls SHALL be presented as sliders, and each SHALL also expose 
 - **WHEN** the operator drags a control's slider or types a value into its numeric field
 - **THEN** both reflect the same value and the artwork updates accordingly
 
+### Requirement: Controls lock while a plot is running
+
+Once a plot has started, the artwork's placement and all of its drawing controls SHALL be locked (read-only) until the plot ends, so the geometry being plotted cannot change while it is being drawn. The controls SHALL re-enable when the plot completes, is stopped, or is aborted.
+
+#### Scenario: Locked during a plot
+
+- **WHEN** the operator starts a plot
+- **THEN** the drawing controls and placement for the plotted artwork become read-only and cannot be changed for the duration of the plot
+
+#### Scenario: Unlocked after the plot ends
+
+- **WHEN** the plot completes, is stopped, or is aborted
+- **THEN** the drawing controls and placement become editable again
+
 ### Requirement: Per-artwork control values
 
 Each placed artwork SHALL carry its own drawing-control values, so multiple artworks on one page can be tuned independently, and those values SHALL persist with the session.

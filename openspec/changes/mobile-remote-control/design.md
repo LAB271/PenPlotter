@@ -1,47 +1,38 @@
 ## Context
 
-The browser is a thin client over a Pi-hosted daemon that owns the serial port and streams autonomously. Plots survive client disconnect. The desktop UI (`src/ui/App.tsx`) is one large component with a fixed three-column flex layout and a bottom transport strip. `GrblController` already sends single-byte real-time commands out-of-band (`sendRealtime`), and defines but never uses the feed-override bytes.
+The browser is a thin client over a Pi-hosted daemon that owns the serial port and streams autonomously; plots survive client disconnect, and the daemon already emits live status (`WPos` ~10 Hz) and stream progress. The desktop UI (`src/ui/App.tsx`) is one large component with a fixed three-column flex layout and a bottom transport strip; `PlotCanvas` already renders the bed, paper, artwork, and a live pen marker. The phone can already reach the app — it just isn't laid out for a small screen and the live view isn't surfaced.
 
 ## Goals / Non-goals
 
 **Goals**
-- A phone can monitor a running plot and change its speed, pause/resume/stop, lift the pen, and jog — over the same WiFi/tunnel the desktop uses.
-- Speed changes take effect on the *in-flight* plot, with no restart or regeneration.
+- A phone shows a clean view of the live plot (canvas + pen marker), state, position, and progress.
+- Pause / Resume / Stop are easy to hit on touch.
 
 **Non-goals**
-- Touch artwork editing (import/place/scale) — desktop-first stays.
+- Any speed or settings adjustment from the phone (monitoring only; live feed override is deferred to a possible later change).
+- Touch artwork editing (import/place/scale), jog, or pen control on mobile.
 - A native app or PWA install.
-- Rapid (travel) override — out of scope; only feed override.
 
 ## Decisions
 
-### Feed override, not regenerated G-code
-GRBL's real-time feed override scales the *commanded* feed live, machine-side, without touching the program stream. This is the only mechanism that can change a plot already partly sent to the controller. The alternative — stop, regenerate at a new feed, restart — loses position and pen registration and is unacceptable mid-plot.
+### Monitoring only — keep it simple
+The phone's job is to watch and, if needed, halt. That removes the need for any new control plumbing: Pause/Resume/Stop already exist as daemon commands, and the live view already exists in `PlotCanvas`. So this is a **layout/presentation change**, not new behaviour — the smallest thing that closes the real gap ("it doesn't look nice and I can't see the live plotter").
 
-- GRBL/FluidNC override range is **10–200 %** of the programmed feed, adjusted in **±10 %** (`0x91`/`0x92`) and **±1 %** (`0x93`/`0x94`) steps, with reset-to-100 % (`0x90`). There is **no absolute-set byte** — the controller method steps from the current override toward the entered target.
-- The operator enters a **target %** (number, not a slider — matching the "machine settings are typed" preference); the UI shows the equivalent mm/min from the baked draw feed for context.
-- GRBL reports the active override in the `Ov:` field of its status report. The controller parses it so the UI shows the *real* machine value and the step loop converges (and re-syncs after a reconnect).
+### Responsive via Tailwind breakpoints, one component
+The existing layout reflows rather than forking a separate mobile app. At phone widths the three columns stack into a single column with the canvas (live pen marker + progress) as the centrepiece, status/position above or below it, and large Pause/Resume/Stop targets. At `>= md` the desktop three-column editor is unchanged. One source of truth, no duplicated wiring.
 
-### Override target as a real-time command across the gateway
-The set-override command is real-time, like pause/resume: it bypasses the line queue. `GatewayClient` sends an "override target" message; the daemon translates it to the stepping logic on the controller. Because GRBL absorbs real-time bytes mid-line, this is safe during a stream.
-
-### Responsive layout via Tailwind breakpoints, one component
-Rather than a separate mobile app, the existing layout reflows. At `< sm` (phone), the side panels stack/collapse and a compact **remote** region surfaces the transport + speed + pen + jog with large targets; the canvas shrinks to a monitor (it still shows the live pen marker and progress). At `>= md`, today's three-column editor is unchanged. This keeps a single source of truth and avoids duplicating the control wiring.
-
-### Speed control available idle and mid-plot
-The override persists in the controller, so setting it while idle pre-arms the next plot's effective speed; setting it mid-plot retargets immediately. Same control, both states.
+### Reuse the live pen marker and progress
+The canvas already maps `WPos` to a pen marker and the bottom strip already shows state/progress; the phone view simply arranges these to be visible and legible on a small screen. No new data, no new events.
 
 ## Risks / Trade-offs
 
-- **Stepwise convergence:** reaching a target % takes a short burst of ±10/±1 bytes; the UI should debounce typed input and converge to the reported `Ov:` rather than assuming success. Mitigation: drive the loop off status feedback.
-- **Override vs. min feed:** very low % on an already-slow draw feed can stall perceptible motion; clamp the target to the documented 10–200 % and show mm/min so the operator sees the real speed.
-- **Single-component growth:** `App.tsx` is already large; the responsive remote adds markup. Acceptable for now; a later UI-polish change can extract components.
+- **Single-component growth:** `App.tsx` is already large; responsive markup adds to it. Acceptable now; a later UI-polish change can extract components.
+- **Canvas legibility on small screens:** the bed is wide (up to A0); on a phone the paper+artwork must scale to fit and the pen marker stay visible. Mitigation: the canvas already fits-to-container via `ResizeObserver`; verify the marker remains visible at phone size.
 
 ## Migration
 
-Additive. No persisted-state or protocol format changes; the override command is new and ignored by older daemons (verify graceful no-op). Desktop behaviour is unchanged when the viewport is wide.
+Pure presentation change. No persisted-state or protocol changes; desktop behaviour is unchanged when the viewport is wide.
 
 ## Open Questions
 
-- Preferred phone breakpoint and whether the remote should be a bottom sheet vs. a full stacked column (visual polish — decide during implementation against a real device).
-- Whether to also surface the typed machine feeds (draw/travel/jog) on the mobile remote or keep those desktop-only (they only affect the *next* plot).
+- Exact phone breakpoint and whether the transport sits as a fixed bottom bar vs. inline below the canvas (visual polish — decide against a real device).
