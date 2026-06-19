@@ -10,6 +10,15 @@ plot — there is no browser Web Serial path — because it fixes the macOS CH34
 reopen-wedge and lets a plot survive a browser or laptop disconnect, which is also
 exactly what unattended **Raspberry Pi** plotting needs.
 
+> ⚠️ **Re-check work zero after any power-off — this machine has no limit switches.**
+> The work origin is tried to be remembered across power cycles, 
+> but a power-off/on (of the Pi, the plotter, or both) can leave the restored origin quite 
+> offset. **Before plotting after a power cycle, verify (and if needed
+> re-set) work zero by jogging to the paper's top-left corner.** If the origin is wrong,
+> the machine has nothing to stop it and **will drive the gantry into the frame.** When
+> in doubt, jog slowly and keep a hand near the power switch or turn the machine off/motors
+> to move it manually to the homepoint. 
+
 ## Features
 
 - **Import SVG or PNG/JPEG.** SVGs are flattened to polylines using the browser DOM

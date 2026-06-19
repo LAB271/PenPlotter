@@ -14,23 +14,28 @@ The gateway SHALL run as a host service that starts automatically when the Raspb
 - **WHEN** the gateway process exits unexpectedly
 - **THEN** the service restarts it automatically and reconnects to the plotter
 
-### Requirement: SSH-gated web app access
+### Requirement: Access-gated web app
 
-The Pi SHALL serve the web app and its control channel bound to loopback so it is NOT reachable directly over the WiFi. Access SHALL be via an SSH local port-forward, so only those who can SSH to the Pi (their key authorized on the Pi) can reach the app. SSH keys MAY be distributed to the team through a shared 1Password vault/group.
+The Pi SHALL NOT expose plotter control openly on the WiFi. The daemon SHALL support two access models: (a) by default it binds to loopback, so the app is reachable only through an SSH local port-forward — access is an SSH key authorized on the Pi, and keys MAY be distributed to the team via a shared 1Password vault/group; or (b) optionally it binds to the LAN with a shared password, in which case the control channel SHALL be refused until the correct password is supplied. Under either model, an unauthorized device on the same WiFi SHALL NOT be able to drive the plotter.
 
-#### Scenario: Access through an SSH tunnel
+#### Scenario: Access through an SSH tunnel (loopback default)
 
-- **WHEN** an authorized operator opens an SSH local port-forward to the Pi and browses the forwarded local port
+- **WHEN** an authorized operator opens an SSH local port-forward to the loopback-bound daemon and browses the forwarded local port
 - **THEN** the web app loads and its control channel connects back through the tunnel, and the operator can run the plotter
 
-#### Scenario: Not reachable without SSH
+#### Scenario: Optional shared-password LAN access
 
-- **WHEN** someone on the same WiFi opens the Pi's address directly (no SSH tunnel)
-- **THEN** the web app is not served to them, because the daemon is bound to loopback
+- **WHEN** the daemon is configured with a shared password and bound to the LAN, and an operator on the WiFi opens the Pi's address and supplies the password
+- **THEN** the web app loads and the control channel connects once the password is accepted, and the operator can run the plotter
 
-#### Scenario: Upload and plot through the tunnel
+#### Scenario: Not reachable without authorization
 
-- **WHEN** the operator uploads a drawing in the web app and starts a plot
+- **WHEN** an unauthorized device on the same WiFi opens the Pi's address with no SSH tunnel and no/wrong password
+- **THEN** it cannot control the plotter — the loopback bind refuses the direct connection, or (in LAN mode) the control channel is rejected without the correct password
+
+#### Scenario: Upload and plot
+
+- **WHEN** an authorized operator uploads a drawing in the web app and starts a plot
 - **THEN** the drawing is converted in the browser and streamed by the Pi to the plotter
 
 #### Scenario: Team access managed centrally

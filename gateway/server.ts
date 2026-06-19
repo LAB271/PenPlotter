@@ -155,7 +155,7 @@ ctrl.on('connected', (e) => {
 });
 ctrl.on('disconnected', () => {
   connected = false;
-  if (posReady) persistState(true); // flush the freshest position at power-off time
+  if (posReady && ctrl.wcoKnown) persistState(true); // flush the freshest position at power-off time
   // Stop persisting until the next restore. If the plotter power-cycled, it
   // reconnects reporting mpos=0 with a stale WCO; persisting that bogus position
   // (~5 Hz status) would overwrite the saved home before restoreSavedPosition()
@@ -172,7 +172,10 @@ ctrl.on('status', (s) => {
   lastWpos = { x: s.mpos.x - lastWco.x, y: s.mpos.y - lastWco.y, z: s.mpos.z - lastWco.z };
   // Persist on every changed status (~5 Hz) so a mid-plot power-off restores
   // accurately; persistState dedupes unchanged positions and serializes writes.
-  if (posReady) persistState();
+  // Gate on wcoKnown: until the controller reports a real WCO this connection,
+  // the cached offset is stale and lastWpos would be raw machine coords — saving
+  // that would corrupt the home (the >5 cm Pi-reboot drift).
+  if (posReady && ctrl.wcoKnown) persistState();
   broadcast({ type: 'event', event: 'status', payload: s });
   broadcast({ type: 'streamDebug', payload: ctrl.streamDebug as StreamDebug });
 });
@@ -412,7 +415,7 @@ function preventIdleSleep() {
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
-    persistState(true); // save the latest position synchronously before exiting
+    if (posReady && ctrl.wcoKnown) persistState(true); // save the latest position synchronously before exiting
     void transport.close().finally(() => process.exit(0));
   });
 }

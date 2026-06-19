@@ -31,6 +31,24 @@ describe('character-counting streaming window', () => {
   });
 });
 
+describe('wcoKnown (gates position persistence)', () => {
+  it('stays false until a status with a real WCO arrives', async () => {
+    const t = new FakeTransport();
+    const c = new GrblController(t);
+    expect(c.wcoKnown).toBe(false);
+
+    // A status without a WCO field must NOT mark the offset as known — the
+    // cached WCO is still a guess, so a reconstructed work position is unsafe.
+    t.feed('<Idle|MPos:100.000,100.000,0.000|FS:0,0>\r\n');
+    await tick();
+    expect(c.wcoKnown).toBe(false);
+
+    t.feed('<Idle|MPos:100.000,100.000,0.000|WCO:100.000,100.000,0.000>\r\n');
+    await tick();
+    expect(c.wcoKnown).toBe(true);
+  });
+});
+
 describe('completion detection', () => {
   it('completes only after queue empty AND state Idle', async () => {
     const t = new FakeTransport();

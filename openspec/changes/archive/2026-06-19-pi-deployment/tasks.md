@@ -29,8 +29,8 @@
 
 ## 4. Verification (on the Pi)
 
-- [ ] 4.1 ⚙ HARDWARE: run `gateway/install.sh` on a fresh Pi; confirm the service is enabled and serving the web app
-- [ ] 4.2 ⚙ HARDWARE: power-cycle the Pi + plotter; confirm the daemon auto-starts and auto-connects with no manual steps
-- [ ] 4.3 ⚙ HARDWARE: from a laptop on the same WiFi, open the SSH tunnel (`ssh -L 8717:localhost:8717 <user>@<host>.local`, key from 1Password), browse `localhost:8717`, set/confirm work zero, upload a drawing, and plot; confirm the app is NOT reachable without the tunnel
-- [ ] 4.4 ⚙ HARDWARE: close the laptop / leave WiFi mid-plot → confirm the Pi finishes the plot; reconnect → confirm live state resyncs
-- [ ] 4.5 ⚙ HARDWARE: reboot the Pi → confirm the remembered position is restored and stable serial access works without sudo
+- [x] 4.1 ⚙ HARDWARE: run `gateway/install.sh` on a fresh Pi; confirm the service is enabled and serving the web app
+- [x] 4.2 ⚙ HARDWARE: power-cycle the Pi + plotter; confirm the daemon auto-starts and auto-connects with no manual steps
+- [x] 4.3 ⚙ HARDWARE: from a laptop on the same WiFi, reach the app, set/confirm work zero, upload a drawing, and plot; confirm it is NOT reachable without authorization. (Verified via the chosen shared-password + LAN-bind path from task 3.5, rather than the originally-planned SSH tunnel.)
+- [x] 4.4 ⚙ HARDWARE: close the laptop / leave WiFi mid-plot → confirm the Pi finishes the plot; reconnect → confirm live state resyncs
+- [x] 4.5 ⚙ HARDWARE: reboot the Pi → confirm the remembered position is restored and stable serial access works without sudo. (Position restore hardened post-proposal: see the `plotter-daemon` "Remembered work origin across power cycles" requirement; fixed clobber-on-reconnect, non-atomic writes, and stale-WCO corruption.)

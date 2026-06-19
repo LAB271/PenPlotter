@@ -87,6 +87,11 @@ export class GrblController {
   private _connected = false;
   private _lastStatus: StatusReport | null = null;
   private _lastWco: Position = { x: 0, y: 0, z: 0 };
+  // True once a status with a *real* WCO field has arrived for the current
+  // connection. Until then `_lastWco` is a stale/default guess (it carries over
+  // between connects for smooth display), so a reconstructed work position is
+  // untrustworthy — the gateway must not persist it. Reset on every (re)connect.
+  private _wcoKnown = false;
   private _settings: GrblSettings = {};
 
   calibration: Calibration = { ...DEFAULT_CALIBRATION };
@@ -105,6 +110,10 @@ export class GrblController {
   }
   get lastStatus(): StatusReport | null {
     return this._lastStatus;
+  }
+  /** True once a real WCO has been reported this connection (work position is trustworthy). */
+  get wcoKnown(): boolean {
+    return this._wcoKnown;
   }
   get settings(): GrblSettings {
     return this._settings;
@@ -142,6 +151,7 @@ export class GrblController {
     this.reader.reset();
     this.bannerWaiters = [];
     this._lastStatus = null;
+    this._wcoKnown = false; // the cached WCO is now stale until the controller re-reports it
     this.writeChain = Promise.resolve();
     this.paused = false;
   }
@@ -202,8 +212,10 @@ export class GrblController {
         // GRBL/FluidNC only sends WCO occasionally — cache it and apply it to
         // every report so derived work position doesn't jump.
         const report = line.report;
-        if (report.wco) this._lastWco = report.wco;
-        else report.wco = this._lastWco;
+        if (report.wco) {
+          this._lastWco = report.wco;
+          this._wcoKnown = true;
+        } else report.wco = this._lastWco;
         this._lastStatus = report;
         this.events.emit('status', report);
         if (this.pendingComplete && report.state === 'Idle') this.finishStream();
@@ -576,3 +588,5 @@ function stripComment(line: string): string {
     .replace(/;.*$/, '')
     .trim();
 }
+
+
