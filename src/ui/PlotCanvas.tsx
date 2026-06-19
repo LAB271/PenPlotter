@@ -43,10 +43,16 @@ export function PlotCanvas(props: Props) {
     onPlacement,
     locked = false,
   } = props;
-  const margin = 64; // px clearance around the bed so transform handles stay reachable
+  // On narrow (phone) canvases the bed (A0) dwarfs the paper, leaving the drawing
+  // tiny with empty bed all around — so fit to the paper instead, with a small
+  // margin. On wider screens fit the whole bed (more handle clearance for editing).
+  const compact = width > 0 && width < 700;
+  const margin = compact ? 16 : 64; // px clearance for transform handles
+  const fitW = compact ? paperW : bedW;
+  const fitH = compact ? paperH : bedH;
   const pxPerMm = Math.max(
     0.01,
-    Math.min((width - 2 * margin) / bedW, (height - 2 * margin) / bedH),
+    Math.min((width - 2 * margin) / fitW, (height - 2 * margin) / fitH),
   );
   const markerR = 7 / pxPerMm;
 

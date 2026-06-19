@@ -38,9 +38,9 @@ The system SHALL use a configurable draw feed rate for pen-down moves and a (fas
 - **WHEN** generating moves
 - **THEN** pen-down moves use the draw feed and pen-up moves use the travel feed, neither exceeding the machine maximum
 
-### Requirement: Well-framed program
+### Requirement: Well-framed optimized program
 
-The system SHALL frame the program with the required modal setup (millimeters, absolute), start and end with the pen up, and return to the work origin at the end. Stroke ordering MAY follow document order in this change (path optimization is deferred).
+The system SHALL frame the program with the required modal setup (millimeters, absolute), start and end with the pen up, and return to the work origin at the end. The system SHALL order strokes by nearest pen-up travel from the current position, starting at the work origin, and MAY reverse stroke direction when doing so reduces pen-up travel without changing the drawn geometry.
 
 #### Scenario: Safe start and end
 

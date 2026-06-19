@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GatewayClient } from '../transport/GatewayClient';
 import { Calibration } from '../grbl/settings';
-import { StatusReport } from '../grbl/types';
+import { StatusReport, type GrblSettings } from '../grbl/types';
 import { loadCalibration, saveCalibration } from './calibrationStore';
 import { loadSession, saveSession, type Session, type PersistedArt } from './sessionStore';
 import { flattenSvg } from '../plot/svg';
 import { imageToField, traceField, type FieldSource } from '../plot/raster';
 import { applyDetail } from '../plot/detail';
-import { generateGcode } from '../plot/gcode';
+import { estimatePlotTime, formatDuration, generateGcode } from '../plot/gcode';
 import { anchorPlacement, bounds, fitPlacement, placePolylines } from '../plot/place';
 import { PAPER_SIZES, paperDims } from '../plot/paper';
 import type { Artwork, Placement, Polyline } from '../plot/types';
@@ -100,6 +100,9 @@ export function App() {
   const [version, setVersion] = useState('');
   const [status, setStatus] = useState<StatusReport | null>(null);
   const [progress, setProgress] = useState<{ acked: number; total: number } | null>(null);
+  // Machine motion limits read from GRBL settings ($120/$121 accel, $11 junction
+  // deviation), used to estimate plot time with realistic accel/cornering.
+  const [motion, setMotion] = useState<{ accel?: number; jdev?: number }>({});
   const [alert, setAlert] = useState('');
   const [needsAuth, setNeedsAuth] = useState(false);
   const [cal, setCal] = useState<Calibration>(loadCalibration);
@@ -143,9 +146,11 @@ export function App() {
         setConnected(true);
         setNeedsAuth(false);
         setVersion(e.version);
+        setMotion(readMotion(ctrl.settings)); // settings arrive with the snapshot
         setAlert('');
         pushLog('SYS', `connected — GRBL ${e.version}`);
       }),
+      ctrl.on('settings', (s) => setMotion(readMotion(s))),
       ctrl.on('disconnected', () => {
         setConnected(false);
         setStatus(null);
@@ -459,6 +464,22 @@ export function App() {
   );
   const selectedStrokes = displayItems.find((d) => d.id === selectedId)?.polylines.length ?? 0;
 
+  // Estimated total plot time for the currently placed artwork (recomputed when
+  // the artwork, layout, or feeds change). Walks the program the same placement
+  // would generate, so it reflects the feeds, segment count, and stroke order.
+  const totalEstSec = useMemo(() => {
+    if (displayItems.length === 0) return 0;
+    const placed = displayItems.flatMap((i) => placePolylines(i.polylines, i.placement));
+    const gc = generateGcode(placed, {
+      penUpZ: cal.penUpZ,
+      penDownZ: cal.penDownZ,
+      dwellMs: cal.penDwellMs,
+      drawFeed: cal.drawFeed,
+      travelFeed: cal.travelFeed,
+    });
+    return estimatePlotTime(gc, motion);
+  }, [displayItems, cal, motion]);
+
   const updatePlacement = useCallback((id: string, pl: Placement) => {
     setItems((list) => list.map((i) => (i.id === id ? { ...i, placement: pl } : i)));
   }, []);
@@ -583,10 +604,26 @@ export function App() {
   }
 
   const setCalField = (k: keyof Calibration) => (v: number) => setCal((p) => ({ ...p, [k]: v }));
-  const pct = Math.round(progressFrac * 100);
+
+  // Progress fraction: prefer the local distance-based one (smooth, set by the
+  // device running the plot); fall back to the daemon's broadcast acked/total so
+  // other devices (e.g. a phone watching a laptop-started plot) still track it.
+  const lineFrac = progress && progress.total > 0 ? progress.acked / progress.total : 0;
+  const fracDone = progressFrac > 0 ? progressFrac : lineFrac;
+  const pct = Math.round(fracDone * 100);
+
+  // Time readout: remaining (scaled by the live speed override) while plotting,
+  // otherwise the estimated total for the placed artwork. Both derive from the
+  // shared estimate, so every device shows it — not just the one that started.
+  const remainingSec = Math.max(0, (totalEstSec * (1 - fracDone) * 100) / Math.max(10, speedPct));
+  const timeText = progress
+    ? `${formatDuration(remainingSec)} left`
+    : totalEstSec > 0
+      ? `${formatDuration(totalEstSec)} total`
+      : '';
 
   return (
-    <div className="flex h-screen flex-col bg-slate-100 text-slate-800">
+    <div className="flex h-dvh flex-col bg-slate-100 text-slate-800">
       {needsAuth && <LoginOverlay onSubmit={(pw) => ctrl()?.authenticate(pw)} />}
       {/* Top bar */}
       <header className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 shadow-sm md:gap-3">
@@ -603,7 +640,7 @@ export function App() {
             Disconnect
           </button>
         )}
-        <span className="text-xs text-slate-500">
+        <span className="hidden text-xs text-slate-500 md:inline">
           {connected ? `GRBL ${version} · bed ${bedW}×${bedH} mm` : 'not connected'}
         </span>
         <div className="ml-auto flex items-center gap-2">
@@ -665,9 +702,39 @@ export function App() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-wrap content-start overflow-y-auto md:flex-nowrap md:overflow-hidden">
-        {/* Left panel — on phones it shares the row below the canvas with the right panel. */}
-        <aside className="order-2 w-1/2 shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
+        {/* Center canvas — fills the screen on phones; middle column on desktop. */}
+        <div
+          ref={canvasBox}
+          className="relative min-h-0 w-full min-w-0 flex-1 bg-slate-200 md:order-2 md:h-auto md:w-auto md:flex-1"
+        >
+          {size.width > 0 && (
+            <PlotCanvas
+              width={size.width}
+              height={size.height}
+              bedW={bedW}
+              bedH={bedH}
+              paperW={paper.widthMm}
+              paperH={paper.heightMm}
+              artworks={displayItems}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onPlacement={updatePlacement}
+              penPos={penPos}
+              locked={plotting}
+            />
+          )}
+          {items.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-slate-400">
+              Add an SVG or PNG to place it on the page
+            </div>
+          )}
+        </div>
+
+        {/* Controls: a compact bottom row on phones; dissolves into the columns on desktop. */}
+        <div className="flex max-h-[50%] min-h-0 shrink-0 overflow-hidden md:contents">
+          {/* Left panel */}
+          <aside className="w-1/2 shrink-0 overflow-y-auto border-r border-slate-300 bg-white p-3 text-sm md:order-1 md:w-60">
           <Section title="Artwork" className="hidden md:block">
             <div className="flex gap-2">
               <label className={`${btnPrimary} flex-1 cursor-pointer text-center`}>
@@ -757,36 +824,8 @@ export function App() {
           </Section>
         </aside>
 
-        {/* Center canvas */}
-        <div
-          ref={canvasBox}
-          className="relative order-1 h-[42vh] w-full min-w-0 shrink-0 bg-slate-200 md:order-2 md:h-auto md:w-auto md:flex-1"
-        >
-          {size.width > 0 && (
-            <PlotCanvas
-              width={size.width}
-              height={size.height}
-              bedW={bedW}
-              bedH={bedH}
-              paperW={paper.widthMm}
-              paperH={paper.heightMm}
-              artworks={displayItems}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              onPlacement={updatePlacement}
-              penPos={penPos}
-              locked={plotting}
-            />
-          )}
-          {items.length === 0 && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-slate-400">
-              Add an SVG or PNG to place it on the page
-            </div>
-          )}
-        </div>
-
         {/* Right panel */}
-        <aside className="order-3 w-1/2 shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:w-64">
+        <aside className="w-1/2 shrink-0 overflow-y-auto border-l border-slate-300 bg-white p-3 text-sm md:order-3 md:w-64">
           <Section title="Home / calibration">
             <p className="mb-1.5 text-xs text-slate-500">
               Move the pen to the paper's top-left corner — jog with the arrows, or use “Motors off”
@@ -933,6 +972,7 @@ export function App() {
             )}
           </Section>
         </aside>
+        </div>
       </div>
 
       {/* Diagnostic log panel */}
@@ -970,14 +1010,14 @@ export function App() {
         <span>
           State: <b>{status?.state ?? '—'}</b>
         </span>
-        <span>MPos {fmtPos(status?.mpos)}</span>
+        <span className="hidden md:inline">MPos {fmtPos(status?.mpos)}</span>
         <span>WPos {fmtPos(penPos)}</span>
         <div className="h-2 w-48 overflow-hidden rounded bg-slate-200">
           <div className="h-full bg-blue-600 transition-all" style={{ width: `${pct}%` }} />
         </div>
-        <span>
+        <span className="whitespace-nowrap">
           {pct > 0 ? `${pct}%` : ''}
-          {progress ? ` · ${progress.acked}/${progress.total} lines` : ''}
+          {timeText ? `${pct > 0 ? ' · ' : ''}${timeText}` : ''}
         </span>
         {/* Speed = live feed override (pause, change, resume). Desktop only. */}
         <label className="hidden items-center gap-1 md:flex" title="Plotting speed (% of feed)">
@@ -1172,6 +1212,14 @@ function JogBtn(props: { label: string; onPress: () => void; disabled: boolean }
 
 function fmtPos(p: { x: number; y: number } | null | undefined): string {
   return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}` : '—';
+}
+
+/** Pull motion limits from GRBL settings: accel = min($120,$121), jdev = $11. */
+function readMotion(s: GrblSettings): { accel?: number; jdev?: number } {
+  const accels = [s[120], s[121]].filter((v): v is number => typeof v === 'number' && v > 0);
+  const accel = accels.length ? Math.min(...accels) : undefined;
+  const jdev = typeof s[11] === 'number' && s[11] > 0 ? s[11] : undefined;
+  return { accel, jdev };
 }
 
 /** Total XY travel distance (mm) of a G-code program — for smooth progress. */

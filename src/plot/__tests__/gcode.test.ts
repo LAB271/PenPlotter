@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateGcode, PenOptions } from '../gcode';
+import { estimatePlotTime, formatDuration, generateGcode, PenOptions } from '../gcode';
 import type { Polyline } from '../types';
 
 const OPTS: PenOptions = {
@@ -75,10 +75,142 @@ describe('generateGcode', () => {
     expect(travelMoves.length).toBeGreaterThan(0);
   });
 
+  it('orders strokes by nearest pen-up travel from the current position', () => {
+    const gc = generateGcode(
+      [
+        [
+          { x: 100, y: 0 },
+          { x: 101, y: 0 },
+        ],
+        [
+          { x: 5, y: 0 },
+          { x: 6, y: 0 },
+        ],
+        [
+          { x: 10, y: 0 },
+          { x: 11, y: 0 },
+        ],
+      ],
+      OPTS,
+    );
+    const travels = gc.filter((l) => l.endsWith('F5000'));
+    expect(travels.slice(0, 3)).toEqual([
+      'G1 X5 Y0 F5000',
+      'G1 X10 Y0 F5000',
+      'G1 X100 Y0 F5000',
+    ]);
+  });
+
+  it('reverses a stroke when its end is closest to the current position', () => {
+    const gc = generateGcode(
+      [
+        [
+          { x: 100, y: 0 },
+          { x: 1, y: 0 },
+        ],
+      ],
+      OPTS,
+    );
+    expect(gc).toContain('G1 X1 Y0 F5000');
+    expect(gc).toContain('G1 X100 Y0 F1500');
+    expect(gc.indexOf('G1 X1 Y0 F5000')).toBeLessThan(gc.indexOf('G1 X100 Y0 F1500'));
+  });
+
   it('skips polylines with fewer than two points', () => {
     const gc = generateGcode([[{ x: 5, y: 5 }]], OPTS);
     // No travel/draw moves emitted except the final return to origin.
     const moves = gc.filter((l) => l.startsWith('G1 X') && l !== 'G1 X0 Y0 F5000');
     expect(moves.length).toBe(0);
+  });
+});
+
+describe('estimatePlotTime', () => {
+  const MOTION = { accel: 500, jdev: 0.01 };
+
+  it('models trapezoidal acceleration for a straight stroke', () => {
+    // Single stroke (0,0)->(10,0): start travel dist 0; pen-down dwell 0.25s;
+    // draw 10mm @25mm/s, a=500 → 0.45s; pen-up dwell 0.25s; return 10mm @83.3mm/s
+    // (triangle, never reaches cruise) → 2·√(5000)/500 = 0.2828s.
+    const gc = generateGcode(
+      [
+        [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+        ],
+      ],
+      OPTS,
+    );
+    expect(estimatePlotTime(gc, MOTION)).toBeCloseTo(0.45 + 0.5 + 0.2828427, 4);
+  });
+
+  it('returns 0 for a program with no drawable strokes', () => {
+    const gc = generateGcode([[{ x: 5, y: 5 }]], OPTS);
+    expect(estimatePlotTime(gc, MOTION)).toBe(0);
+  });
+
+  it('is at least the constant-feed lower bound (accel only adds time)', () => {
+    const stroke: Polyline = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+    ];
+    const gc = generateGcode([stroke], OPTS);
+    // Constant-feed: draw 50/25 + return 50/83.3 + two 0.25 dwells.
+    const naive = 50 / 25 + 50 / (5000 / 60) + 0.5;
+    expect(estimatePlotTime(gc, MOTION)).toBeGreaterThanOrEqual(naive);
+  });
+
+  it('a faster draw feed lowers the estimate', () => {
+    const stroke: Polyline = [
+      { x: 0, y: 0 },
+      { x: 50, y: 0 },
+    ];
+    const slow = estimatePlotTime(generateGcode([stroke], OPTS), MOTION);
+    const fast = estimatePlotTime(generateGcode([stroke], { ...OPTS, drawFeed: 3000 }), MOTION);
+    expect(fast).toBeLessThan(slow);
+  });
+
+  it('higher acceleration lowers the estimate', () => {
+    const gc = generateGcode(
+      [
+        [
+          { x: 0, y: 0 },
+          { x: 50, y: 0 },
+        ],
+      ],
+      OPTS,
+    );
+    expect(estimatePlotTime(gc, { accel: 1500, jdev: 0.01 })).toBeLessThan(
+      estimatePlotTime(gc, { accel: 200, jdev: 0.01 }),
+    );
+  });
+
+  it('sharper cornering (smaller junction deviation) raises the estimate', () => {
+    // A right-angle stroke: same gcode, only the cornering limit differs, so the
+    // travel/dwell terms cancel and only the corner crawl changes the total.
+    const gc = generateGcode(
+      [
+        [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+        ],
+      ],
+      OPTS,
+    );
+    const loose = estimatePlotTime(gc, { accel: 500, jdev: 0.2 });
+    const tight = estimatePlotTime(gc, { accel: 500, jdev: 0.001 });
+    expect(tight).toBeGreaterThan(loose);
+  });
+});
+
+describe('formatDuration', () => {
+  it('formats sub-minute, sub-hour, and hour-plus durations', () => {
+    expect(formatDuration(45)).toBe('~45s');
+    expect(formatDuration(59)).toBe('~59s');
+    expect(formatDuration(60)).toBe('~1m 00s');
+    expect(formatDuration(90)).toBe('~1m 30s');
+    expect(formatDuration(750)).toBe('~12m 30s');
+    expect(formatDuration(3600)).toBe('~1h 00m');
+    expect(formatDuration(3840)).toBe('~1h 04m');
   });
 });
