@@ -1,0 +1,42 @@
+## ADDED Requirements
+
+### Requirement: Live preview of drawing controls
+
+The system SHALL let the operator adjust how an imported artwork looks and update the on-canvas preview to reflect the change, without re-importing the file. The change SHALL apply to the artwork already placed on the page.
+
+#### Scenario: Adjusting a control updates the preview
+
+- **WHEN** the operator changes a drawing control for a placed artwork
+- **THEN** the canvas preview updates to show the result (after at most a brief processing delay for controls that re-derive geometry from the source)
+
+#### Scenario: Applies to both PNG and SVG
+
+- **WHEN** the placed artwork is a traced PNG or a flattened SVG
+- **THEN** the relevant controls retune that artwork in place and the preview updates for either format
+
+### Requirement: Preview matches the plotted output
+
+The geometry shown in the live preview SHALL be the same geometry that is plotted, so adjusting controls changes both identically.
+
+#### Scenario: What you see is what plots
+
+- **WHEN** the operator tunes an artwork's controls and then plots it
+- **THEN** the plotted result corresponds to the previewed geometry, with no separate re-processing that could diverge
+
+### Requirement: Sliders with typeable, configurable values
+
+Drawing-look controls SHALL be presented as sliders, and each SHALL also expose its current numeric value such that the operator can enter an exact value. Each control SHALL have a defined range, and the numeric entry SHALL allow setting a precise value within (and where appropriate beyond) the slider's nominal range.
+
+#### Scenario: Drag or type
+
+- **WHEN** the operator drags a control's slider or types a value into its numeric field
+- **THEN** both reflect the same value and the artwork updates accordingly
+
+### Requirement: Per-artwork control values
+
+Each placed artwork SHALL carry its own drawing-control values, so multiple artworks on one page can be tuned independently, and those values SHALL persist with the session.
+
+#### Scenario: Independent tuning
+
+- **WHEN** two artworks are on the page and the operator tunes one
+- **THEN** the other is unaffected, and each artwork's control values are restored when the session reloads
