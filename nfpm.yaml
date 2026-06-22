@@ -1,0 +1,50 @@
+# nfpm config for the PenPlotter271 Debian package.
+# Build (on an arm64 Linux host) with: bash packaging/assemble.sh
+# SEMVER is exported by assemble.sh from package.json; nfpm expands it here.
+name: penplotter271
+arch: arm64
+platform: linux
+version: ${SEMVER}
+version_schema: semver
+section: misc
+priority: optional
+maintainer: Diederik Siderius <dsiderius@schubergphilis.com>
+description: |
+  Browser-based control app for a GRBL pen plotter.
+  Bundles the gateway daemon (owns the serial port, streams G-code autonomously)
+  and the built web GUI it serves. Self-contained: includes its own Node runtime.
+homepage: https://github.com/LAB271/PenPlotter
+license: MIT
+
+depends:
+  - udev
+
+contents:
+  # Self-contained app tree: bundled Node, gateway.js, GUI dist/, runtime node_modules.
+  - src: build/stage/opt/penplotter271
+    dst: /opt/penplotter271
+    type: tree
+
+  # systemd service.
+  - src: packaging/plotter-gateway.service
+    dst: /lib/systemd/system/plotter-gateway.service
+
+  # Stable serial device + group access (single source of truth in gateway/).
+  - src: gateway/99-plotter.rules
+    dst: /lib/udev/rules.d/99-plotter.rules
+
+  # Operator config — conffile, so edits survive upgrades.
+  - src: packaging/penplotter271.env
+    dst: /etc/penplotter271/penplotter271.env
+    type: "config|noreplace"
+
+  # Scoped sudoers: lets the service user start ONLY the self-update unit.
+  - src: packaging/penplotter271.sudoers
+    dst: /etc/sudoers.d/penplotter271
+    file_info:
+      mode: 0440
+
+scripts:
+  postinstall: packaging/scripts/postinst.sh
+  preremove: packaging/scripts/prerm.sh
+  postremove: packaging/scripts/postrm.sh

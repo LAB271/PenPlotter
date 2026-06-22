@@ -1,5 +1,8 @@
 node_modules
 dist
+dist-gateway
+build
+dist-deb
 *.local
 .DS_Store
 gateway/.plotter-state.json

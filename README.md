@@ -121,8 +121,7 @@ On macOS the daemon automatically runs `caffeinate -dimsu` for its lifetime so i
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GATEWAY_PORT` | `8717` | HTTP + WebSocket port |
-| `GATEWAY_HOST` | `127.0.0.1` | Bind address. `0.0.0.0` exposes it on the LAN |
-| `GATEWAY_PASSWORD` | _(empty)_ | If set, clients must connect with `?token=…`; the control channel is gated |
+| `GATEWAY_HOST` | `127.0.0.1` | Bind address. The daemon has **no built-in auth** — `0.0.0.0` exposes unauthenticated control to the whole LAN. Keep it on loopback and reach it via an SSH tunnel, a VPN (e.g. Tailscale), or a reverse proxy with its own authentication |
 | `PLOTTER_PATH` | _(auto)_ | Pin the serial device; otherwise auto-detect a `usbserial`/`wchusbserial`/`ttyUSB`/`ttyACM` port |
 | `PLOTTER_STATE` | `gateway/.plotter-state.json` | Where the remembered position is persisted |
 
@@ -139,14 +138,17 @@ the `plotter-gateway` systemd service:
 bash gateway/install.sh
 ```
 
-The installer asks whether to set a UI password. With a password it binds `0.0.0.0` and
-gates the control channel; left blank it stays loopback-only and you reach it over an SSH
-tunnel (SSH keys are the access control):
+The daemon binds to loopback (`127.0.0.1`) and has no built-in authentication, so you
+reach it over an SSH tunnel — SSH keys are the access control:
 
 ```bash
 ssh -L 8717:localhost:8717 penplotter@penplotter.local
 # then open http://localhost:8717
 ```
+
+To reach it from a phone or another machine, prefer a VPN (e.g. Tailscale) or a reverse
+proxy that adds its own authentication. Only set `GATEWAY_HOST=0.0.0.0` on a fully trusted
+LAN — it exposes unauthenticated control of the machine to anyone on the network.
 
 Closing the laptop or dropping the tunnel does **not** stop a running plot — the Pi
 streams autonomously; reconnect to monitor. See [`gateway/README.md`](gateway/README.md)

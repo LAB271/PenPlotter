@@ -10,17 +10,19 @@ import { NodeSerialTransport } from './NodeSerialTransport';
 import { DEFAULT_GATEWAY_PORT } from '../src/gateway/protocol';
 import type { ClientMessage, Snapshot, StreamDebug } from '../src/gateway/protocol';
 import type { StatusReport, GrblSettings } from '../src/grbl/types';
+import { APP_VERSION } from './version';
 
 const PORT = Number(process.env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
 // Bind to loopback by default so the app is reachable only via an SSH tunnel
 // (access control = SSH keys). Set GATEWAY_HOST=0.0.0.0 to expose on the LAN.
 const HOST = process.env.GATEWAY_HOST ?? '127.0.0.1';
-// Optional shared password. If set, clients must connect with ?token=<password>;
-// the static UI loads, but the control channel (and thus the plotter) is gated.
-const PASSWORD = process.env.GATEWAY_PASSWORD ?? '';
 const DEVICE_PATH = process.env.PLOTTER_PATH; // optional explicit path
 const RETRY_MS = 3000;
-const DIST = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
+// Served GUI. Defaults to the source-relative dist/ for dev; the package sets
+// GATEWAY_DIST=/opt/penplotter271/dist (the bundled gateway.js sits beside dist/,
+// not one level up as in the source tree).
+const DIST =
+  process.env.GATEWAY_DIST ?? join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
 // Remembered position survives daemon AND plotter power-off (no homing on this
 // machine, so position is otherwise lost every power cycle). Path override lets
 // it live in a writable spot under the service user on the Pi.
@@ -28,8 +30,11 @@ const STATE_FILE =
   process.env.PLOTTER_STATE ??
   join(fileURLToPath(new URL('.', import.meta.url)), '.plotter-state.json');
 // The editable session (artwork + page layout) lives on the Pi so any device
-// that connects gets the current drawing back.
-const SESSION_FILE = join(fileURLToPath(new URL('.', import.meta.url)), '.session.json');
+// that connects gets the current drawing back. Path override lets it live in a
+// writable spot under the service user (the package sets PLOTTER_SESSION).
+const SESSION_FILE =
+  process.env.PLOTTER_SESSION ??
+  join(fileURLToPath(new URL('.', import.meta.url)), '.session.json');
 
 const transport = new NodeSerialTransport({ path: DEVICE_PATH });
 const ctrl = new GrblController(transport);
@@ -363,16 +368,7 @@ const heartbeat = setInterval(() => {
 }, 30000);
 wss.on('close', () => clearInterval(heartbeat));
 
-wss.on('connection', (ws, req) => {
-  if (PASSWORD) {
-    const token = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
-    if (token !== PASSWORD) {
-      send(ws, { type: 'authError', message: 'Wrong or missing password.' });
-      ws.close(4001, 'auth'); // 4001 → client shows the password prompt
-      log('client rejected (bad password)');
-      return;
-    }
-  }
+wss.on('connection', (ws) => {
   clients.add(ws);
   alive.add(ws);
   ws.on('pong', () => alive.add(ws));
@@ -424,6 +420,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 httpServer.listen(PORT, HOST, () => {
+  log(`PenPlotter271 gateway v${APP_VERSION}`);
   log(
     `listening on http://${HOST}:${PORT}  (GUI + WebSocket)${HOST === '127.0.0.1' ? ' — loopback only; reach it via an SSH tunnel' : ''}`,
   );

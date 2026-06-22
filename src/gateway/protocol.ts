@@ -71,7 +71,6 @@ export type ServerMessage =
   | { type: 'control'; inControl: boolean }
   | { type: 'streamDebug'; payload: StreamDebug }
   | { type: 'ack'; id: number }
-  | { type: 'authError'; message: string }
   | { type: 'cmdError'; id?: number; message: string }
   | {
       [K in keyof ForwardedEvents]: { type: 'event'; event: K; payload: ForwardedEvents[K] };

@@ -1,0 +1,5 @@
+# Installed as /etc/sudoers.d/penplotter271 (mode 0440).
+# Lets the gateway service user launch ONLY the self-update unit. That oneshot
+# unit (not the daemon) runs the apt-get install + service restart as root, so
+# the daemon itself holds no general administrative privileges.
+penplotter ALL=(root) NOPASSWD: /usr/bin/systemctl start plotter-update.service

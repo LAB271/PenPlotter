@@ -19,6 +19,7 @@ import {
   normalizeControls,
 } from '../plot/controls';
 import { PlotCanvas } from './PlotCanvas';
+import { Logo } from './Logo';
 
 type Orientation = 'landscape' | 'portrait';
 
@@ -104,7 +105,6 @@ export function App() {
   // deviation), used to estimate plot time with realistic accel/cornering.
   const [motion, setMotion] = useState<{ accel?: number; jdev?: number }>({});
   const [alert, setAlert] = useState('');
-  const [needsAuth, setNeedsAuth] = useState(false);
   const [cal, setCal] = useState<Calibration>(loadCalibration);
 
   // Restore the editable session (artwork + page) so reopening the tab / reloading
@@ -144,7 +144,6 @@ export function App() {
     const unsubs = [
       ctrl.on('connected', (e) => {
         setConnected(true);
-        setNeedsAuth(false);
         setVersion(e.version);
         setMotion(readMotion(ctrl.settings)); // settings arrive with the snapshot
         setAlert('');
@@ -250,9 +249,8 @@ export function App() {
         setAlert(`ALARM:${e.code} — unlock ($X) or reset.`);
         pushLog('ALARM', `ALARM:${e.code}`);
       }),
-      ctrl.on('authRequired', () => setNeedsAuth(true)),
     ];
-    void ctrl.connect(); // auto-attach to the daemon on load (prompts for password if needed)
+    void ctrl.connect(); // auto-attach to the daemon on load
     return () => {
       unsubs.forEach((u) => u());
       void ctrl.disconnect();
@@ -624,9 +622,9 @@ export function App() {
 
   return (
     <div className="flex h-dvh flex-col bg-slate-100 text-slate-800">
-      {needsAuth && <LoginOverlay onSubmit={(pw) => ctrl()?.authenticate(pw)} />}
       {/* Top bar */}
       <header className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 shadow-sm md:gap-3">
+        <Logo className="h-4 w-auto" />
         <span className="text-sm font-semibold tracking-tight">PenPlotter271</span>
         <span
           className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-slate-300'}`}
@@ -1104,38 +1102,6 @@ function Section(props: { title: string; children: React.ReactNode; className?: 
       </h2>
       {props.children}
     </section>
-  );
-}
-
-function LoginOverlay({ onSubmit }: { onSubmit: (pw: string) => void }) {
-  const [pw, setPw] = useState('');
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70">
-      <form
-        className="w-72 rounded-lg bg-white p-5 shadow-xl"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (pw) onSubmit(pw);
-        }}
-      >
-        <h2 className="mb-1 text-sm font-semibold">PenPlotter271</h2>
-        <p className="mb-3 text-xs text-slate-500">Enter the password to control the plotter.</p>
-        <input
-          type="password"
-          autoFocus
-          className="mb-3 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-          placeholder="Password"
-          value={pw}
-          onChange={(e) => setPw(e.target.value)}
-        />
-        <button
-          type="submit"
-          className="w-full rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Unlock
-        </button>
-      </form>
-    </div>
   );
 }
 
