@@ -166,7 +166,7 @@ this folder") so it can't accidentally sync the wrong directory:
 rsync -av --delete \
   --exclude node_modules --exclude dist --exclude .git \
   --exclude 'gateway/.plotter-state.json' \
-  /Users/dsiderius/Desktop/Internal_Projects/PenPlotter271/ \
+  /absolute/path/to/PenPlotter271/ \
   penplotter@penplotter.local:~/PenPlotter271/
 
 # 2. rebuild on the Pi and restart the daemon
