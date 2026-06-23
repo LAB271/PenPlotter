@@ -1,0 +1,59 @@
+name: Release
+
+# Cut a release by pushing a version tag that matches package.json, e.g.:
+#   git tag v1.0.0 && git push origin v1.0.0
+# This builds the arm64 .deb and attaches it to the GitHub Release. The in-app
+# updater installs only these CI-built, tag-traceable artifacts.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the Release and upload the .deb asset
+
+jobs:
+  release:
+    # Standard x64 runner; the arm64 .deb is built under QEMU emulation (free on
+    # a private repo). To use a native arm64 runner instead, change `runs-on` to
+    # an arm64 label and run `bash packaging/ci-build.sh` directly (drop the
+    # docker wrapper in "Build .deb").
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Actions pinned to a full commit SHA (org policy); comment tracks the version.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The package version comes from package.json (nfpm ${SEMVER}); keep the tag
+      # in lockstep so the Release, the .deb, and the in-app version banner agree.
+      - name: Verify tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} != package.json version ${pkg}. Bump package.json or fix the tag."
+            exit 1
+          fi
+
+      # Register binfmt so the x64 runner can run arm64 containers.
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          platforms: arm64
+
+      # Build the arm64 .deb inside an arm64 container. ci-build.sh installs the
+      # build-only tools (nfpm), runs npm ci, then packaging/assemble.sh.
+      - name: Build .deb (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/work -w /work \
+            node:22-bookworm \
+            bash packaging/ci-build.sh
+
+      - name: Attach .deb to the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" dist-deb/*.deb --clobber
