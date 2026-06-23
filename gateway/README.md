@@ -25,16 +25,17 @@ npm run gateway:smoke
 
 ## Raspberry Pi (auto-connect on power-up)
 
-**Prerequisites:** Raspberry Pi OS (Lite is fine — headless), the Pi on your WiFi, SSH enabled, and this repo cloned at `~/PenPlotter271`. Plotter on USB.
+**Prerequisites:** 64-bit Raspberry Pi OS (Lite is fine — headless), the Pi on your WiFi, SSH enabled, plotter on USB.
 
-**One-command install** (idempotent — installs Node + deps, builds the GUI, sets up serial access, always-on, mDNS, and the boot service):
+**Install the package** — download the latest `penplotter271_<version>_arm64.deb` from [Releases](https://github.com/LAB271/PenPlotter/releases), then:
 
 ```bash
-cd ~/PenPlotter271
-bash gateway/install.sh
+sudo apt install ./penplotter271_<version>_arm64.deb
 ```
 
-(If your repo path isn't `/home/pi/PenPlotter271`, edit `WorkingDirectory`/paths in `/etc/systemd/system/plotter-gateway.service` afterward and `sudo systemctl daemon-reload`.)
+It bundles its own Node runtime, installs the app under `/opt/penplotter271`, keeps state under `/var/lib/penplotter271/`, reads config from `/etc/penplotter271/penplotter271.env`, sets up serial access (a `penplotter` user in `dialout` + a udev rule), and enables + starts the `plotter-gateway` boot service. See the [main README](../README.md#raspberry-pi-deployment-debian-package) for config, browser updates, and rollback.
+
+(`gateway/install.sh` — a from-source installer that builds on the Pi — is a development helper, superseded by the package.)
 
 Power-cycle to confirm it auto-starts and auto-connects. Logs: `journalctl -u plotter-gateway -f`.
 
