@@ -1,7 +1,7 @@
 import { Emitter } from '../grbl/emitter';
 import type { Calibration } from '../grbl/settings';
 import type { GrblSettings, StatusReport } from '../grbl/types';
-import type { ClientCommand, ServerMessage, StreamDebug } from '../gateway/protocol';
+import type { ClientCommand, ServerMessage, StreamDebug, UpdateStatus } from '../gateway/protocol';
 
 type ClientEvents = {
   connected: { version: string };
@@ -18,6 +18,10 @@ type ClientEvents = {
   control: { inControl: boolean };
   /** The editable session stored on the daemon (null if none), sent on connect. */
   session: unknown;
+  /** Installed/latest app version (for the version display + update banner). */
+  versionInfo: { appVersion: string; latestVersion: string | null };
+  /** Self-update progress/outcome. */
+  updateStatus: UpdateStatus;
 };
 
 /**
@@ -35,6 +39,9 @@ export class GatewayClient {
   private _status: StatusReport | null = null;
   private _settings: GrblSettings = {};
   private _version = 'unknown';
+  private _appVersion = 'unknown';
+  private _latestVersion: string | null = null;
+  private _updateStatus: UpdateStatus | null = null;
   private _streamDebug: StreamDebug = { inflight: 0, bytes: 0, queued: 0 };
   private _inControl = false;
   private _calibration: Calibration | null = null;
@@ -55,6 +62,15 @@ export class GatewayClient {
   }
   get firmwareVersion(): string {
     return this._version;
+  }
+  get appVersion(): string {
+    return this._appVersion;
+  }
+  get latestVersion(): string | null {
+    return this._latestVersion;
+  }
+  get updateStatus(): UpdateStatus | null {
+    return this._updateStatus;
   }
   get streamDebug(): StreamDebug {
     return this._streamDebug;
@@ -126,8 +142,18 @@ export class GatewayClient {
         this._settings = s.settings;
         this._status = s.status;
         this._streamDebug = s.streamDebug;
+        this._appVersion = s.appVersion;
+        this._latestVersion = s.latestVersion;
+        this._updateStatus = s.update;
         this.setInControl(s.inControl);
         this.setConnected(s.connected);
+        // Surface version/update state to the UI (it reads these from the snapshot
+        // on every (re)connect — including the reconnect after a self-update).
+        this.events.emit('versionInfo', {
+          appVersion: s.appVersion,
+          latestVersion: s.latestVersion,
+        });
+        if (s.update) this.events.emit('updateStatus', s.update);
         if (s.restoredNote) this.events.emit('log', { dir: 'info', text: s.restoredNote });
         // Hand the daemon-stored session to the UI (it restores the artwork/page).
         this.events.emit('session', s.session ?? null);
@@ -160,6 +186,10 @@ export class GatewayClient {
         } else if (msg.event === 'disconnected') this.setConnected(false);
         else if (msg.event === 'status') this._status = msg.payload;
         else if (msg.event === 'settings') this._settings = msg.payload;
+        else if (msg.event === 'versionInfo') {
+          this._appVersion = msg.payload.appVersion;
+          this._latestVersion = msg.payload.latestVersion;
+        } else if (msg.event === 'updateStatus') this._updateStatus = msg.payload;
         this.events.emit(msg.event, msg.payload as never);
         break;
       }
@@ -241,5 +271,9 @@ export class GatewayClient {
   }
   async setSetting(num: number, value: number): Promise<void> {
     await this.cmd({ cmd: 'setSetting', num, value });
+  }
+  /** Trigger a self-update to the latest release (daemon refuses while plotting). */
+  async update(): Promise<void> {
+    await this.cmd({ cmd: 'update' });
   }
 }

@@ -20,8 +20,22 @@ import {
 } from '../plot/controls';
 import { PlotCanvas } from './PlotCanvas';
 import { Logo } from './Logo';
+import type { UpdateStatus } from '../gateway/protocol';
 
 type Orientation = 'landscape' | 'portrait';
+
+/** True if release version `latest` is strictly newer than `current` (semver-ish). */
+function isNewerVersion(latest: string | null, current: string): boolean {
+  if (!latest || !current || current === 'unknown') return false;
+  const a = latest.split('.').map(Number);
+  const b = current.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
 
 // Artwork is flattened/traced once at full detail (the "master"); the detail
 // slider thins it live for both the preview and the plot. 0.2 mm is finer than
@@ -99,6 +113,9 @@ export function App() {
 
   const [connected, setConnected] = useState(false);
   const [version, setVersion] = useState('');
+  const [appVersion, setAppVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [status, setStatus] = useState<StatusReport | null>(null);
   const [progress, setProgress] = useState<{ acked: number; total: number } | null>(null);
   // Machine motion limits read from GRBL settings ($120/$121 accel, $11 junction
@@ -150,6 +167,11 @@ export function App() {
         pushLog('SYS', `connected — GRBL ${e.version}`);
       }),
       ctrl.on('settings', (s) => setMotion(readMotion(s))),
+      ctrl.on('versionInfo', (e) => {
+        setAppVersion(e.appVersion);
+        setLatestVersion(e.latestVersion);
+      }),
+      ctrl.on('updateStatus', (s) => setUpdateStatus(s)),
       ctrl.on('disconnected', () => {
         setConnected(false);
         setStatus(null);
@@ -620,12 +642,22 @@ export function App() {
       ? `${formatDuration(totalEstSec)} total`
       : '';
 
+  const updateAvailable = isNewerVersion(latestVersion, appVersion);
+  const updating = updateStatus?.state === 'downloading' || updateStatus?.state === 'installing';
+
   return (
     <div className="flex h-dvh flex-col bg-slate-100 text-slate-800">
       {/* Top bar */}
       <header className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 shadow-sm md:gap-3">
         <Logo className="h-4 w-auto" />
-        <span className="text-sm font-semibold tracking-tight">PenPlotter271</span>
+        <span className="text-sm font-semibold tracking-tight">
+          PenPlotter271
+          {appVersion ? (
+            <span className="ml-1 align-top text-[10px] font-normal text-slate-400">
+              v{appVersion}
+            </span>
+          ) : null}
+        </span>
         <span
           className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-slate-300'}`}
         />
@@ -699,6 +731,41 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {/* Self-update banner: shown when a newer release exists or an update is in
+          flight. "Update now" is disabled while plotting (the daemon also refuses). */}
+      {(updateAvailable || updating || updateStatus?.state === 'error') && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
+          {updating ? (
+            <span>
+              Updating… {updateStatus?.message ?? ''} The app will reconnect automatically.
+            </span>
+          ) : updateStatus?.state === 'error' && !updateAvailable ? (
+            <span className="text-red-700">Update failed: {updateStatus.message}</span>
+          ) : (
+            <>
+              <span>
+                Update available — v{appVersion} → v{latestVersion}
+                {updateStatus?.state === 'error'
+                  ? ` (last attempt failed: ${updateStatus.message})`
+                  : ''}
+              </span>
+              <button
+                className={btnPrimary}
+                disabled={!connected || plotting}
+                title={plotting ? 'Disabled while a plot is running' : undefined}
+                onClick={() =>
+                  void ctrl()
+                    ?.update()
+                    .catch(() => undefined)
+                }
+              >
+                Update now
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
         {/* Center canvas — fills the screen on phones; middle column on desktop. */}

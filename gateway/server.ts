@@ -2,13 +2,13 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync, openSync, fsyncSync, closeSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GrblController } from '../src/grbl/GrblController';
 import { NodeSerialTransport } from './NodeSerialTransport';
 import { DEFAULT_GATEWAY_PORT } from '../src/gateway/protocol';
-import type { ClientMessage, Snapshot, StreamDebug } from '../src/gateway/protocol';
+import type { ClientMessage, Snapshot, StreamDebug, UpdateStatus } from '../src/gateway/protocol';
 import type { StatusReport, GrblSettings } from '../src/grbl/types';
 import { APP_VERSION } from './version';
 
@@ -35,6 +35,18 @@ const STATE_FILE =
 const SESSION_FILE =
   process.env.PLOTTER_SESSION ??
   join(fileURLToPath(new URL('.', import.meta.url)), '.session.json');
+
+// ---- self-update config ----
+// Where the update oneshot records its progress; the daemon reads it back after
+// the restart an update causes (the WebSocket drops, so status lives in a file).
+const UPDATE_STATUS_FILE =
+  process.env.UPDATE_STATUS ?? join(dirname(STATE_FILE), '.update-status.json');
+// GitHub repo (owner/name) whose latest Release supplies the update `.deb`.
+const GITHUB_REPO = process.env.GITHUB_REPO ?? 'LAB271/PenPlotter';
+// The daemon can't restart its own service; it kicks this detached oneshot, which
+// runs the apt-get install + restart as root. The sudoers rule scopes the user to
+// exactly this command (incl. --no-block).
+const UPDATE_SERVICE = 'plotter-update.service';
 
 const transport = new NodeSerialTransport({ path: DEVICE_PATH });
 const ctrl = new GrblController(transport);
@@ -142,12 +154,93 @@ let version = 'unknown';
 let lastStatus: StatusReport | null = null;
 let settings: GrblSettings = {};
 let controller: WebSocket | null = null; // the single client holding control
+let latestVersion: string | null = null; // latest released version, best-effort
+let lastUpdateStatus: UpdateStatus | null = null; // set below once log() exists
 
 const clients = new Set<WebSocket>();
 const send = (ws: WebSocket, msg: unknown) =>
   ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
 const broadcast = (msg: unknown) => clients.forEach((ws) => send(ws, msg));
 const log = (text: string) => console.log(`[gateway] ${text}`);
+
+// ---- self-update ----
+function readUpdateStatus(): UpdateStatus | null {
+  try {
+    return JSON.parse(readFileSync(UPDATE_STATUS_FILE, 'utf8')) as UpdateStatus;
+  } catch {
+    return null;
+  }
+}
+function writeUpdateStatus(s: UpdateStatus) {
+  lastUpdateStatus = s;
+  try {
+    writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
+  broadcast({ type: 'event', event: 'updateStatus', payload: s });
+}
+lastUpdateStatus = readUpdateStatus(); // pick up the outcome of an update that just restarted us
+
+/** True if a plot is running or paused mid-plot — used to refuse a self-update. */
+function isPlotting(): boolean {
+  const sd = ctrl.streamDebug;
+  return (
+    sd.inflight > 0 ||
+    sd.queued > 0 ||
+    ctrl.isPaused ||
+    lastStatus?.state === 'Run' ||
+    lastStatus?.state === 'Hold'
+  );
+}
+
+/** Best-effort: query GitHub for the latest release version. Never throws/blocks. */
+async function refreshLatestVersion() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'penplotter271' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { tag_name?: string };
+    const tag = body.tag_name?.replace(/^v/, '') ?? null;
+    if (tag && tag !== latestVersion) {
+      latestVersion = tag;
+      broadcast({
+        type: 'event',
+        event: 'versionInfo',
+        payload: { appVersion: APP_VERSION, latestVersion },
+      });
+    }
+  } catch {
+    /* offline / rate-limited — best-effort, leave latestVersion as-is */
+  }
+}
+
+/** Kick the detached update oneshot (runs apt-get install + restart as root). */
+function startUpdate() {
+  writeUpdateStatus({
+    state: 'installing',
+    fromVersion: APP_VERSION,
+    toVersion: latestVersion ?? undefined,
+    message: 'Starting update…',
+    at: new Date().toISOString(),
+  });
+  // --no-block so this call returns before the oneshot restarts our service.
+  const child = spawn('sudo', ['/usr/bin/systemctl', 'start', '--no-block', UPDATE_SERVICE], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  child.on('error', (e) =>
+    writeUpdateStatus({
+      state: 'error',
+      fromVersion: APP_VERSION,
+      message: `Could not start the updater: ${String(e?.message ?? e)}`,
+      at: new Date().toISOString(),
+    }),
+  );
+  child.unref();
+}
 
 // ---- forward controller events to all clients ----
 const fwd = (event: string) => (payload: unknown) => broadcast({ type: 'event', event, payload });
@@ -241,6 +334,9 @@ function snapshot(ws: WebSocket): Snapshot {
   return {
     connected,
     version,
+    appVersion: APP_VERSION,
+    latestVersion,
+    update: lastUpdateStatus,
     status: lastStatus,
     settings,
     streamDebug: ctrl.streamDebug as StreamDebug,
@@ -317,6 +413,13 @@ async function handleCommand(ws: WebSocket, msg: ClientMessage) {
         break;
       case 'saveSession':
         saveSessionBlob(msg.session);
+        break;
+      case 'update':
+        if (isPlotting()) {
+          send(ws, { type: 'cmdError', id, message: 'Refused: a plot is running.' });
+          return;
+        }
+        startUpdate();
         break;
       default:
         send(ws, { type: 'cmdError', id, message: `Unknown command` });
@@ -426,4 +529,7 @@ httpServer.listen(PORT, HOST, () => {
   );
   preventIdleSleep();
   void ensureConnected();
+  // Best-effort latest-release lookup: once on boot, then every 6 h. Non-blocking.
+  void refreshLatestVersion();
+  setInterval(() => void refreshLatestVersion(), 6 * 60 * 60 * 1000);
 });

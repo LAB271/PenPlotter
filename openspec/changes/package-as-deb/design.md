@@ -47,6 +47,8 @@ The WebSocket drops when the daemon restarts mid-update, so the update script wr
 ### D9. CI: bootstrap on the Pi, then QEMU — same recipe
 The package assembly is a single script (`nfpm` + an arm64 Node fetch + `npm ci --omit=dev`). Phase 1: run it **on the Pi** to validate the artifact on the real device. Phase 2: run the *same* script in `.github/workflows/release.yml` under QEMU (`docker/setup-qemu-action` + an arm64 container) on a standard x64 runner — free while the repo is private. Switching to a hosted arm64 runner later is a one-line `runs-on:` change because the recipe is arch-agnostic. *Alternative — start with a hosted arm64 runner:* billable on a private repo now. Deferred.
 
+CI is the supported release path: a `v*` tag produces the `.deb` and the in-app updater (D5) installs only those CI-built artifacts, so every auto-installed package is reproducible and traceable to a tag rather than "whatever was on the Pi that day." The manual Pi build remains the Phase-1 bootstrap/validation step and a fallback if the emulated build proves flaky (see Risks), but it is not how shipped releases are cut.
+
 ## Risks / Trade-offs
 
 - **`serialport` ABI mismatch with bundled Node** → pin both Node version and `serialport` version together; verify `node gateway.js` opens the port on the Pi before cutting a release.
@@ -62,7 +64,7 @@ The package assembly is a single script (`nfpm` + an arm64 Node fetch + `npm ci 
 2. Author `nfpm.yaml` + maintainer scripts + the systemd/udev/env/sudoers artifacts.
 3. **Bootstrap:** assemble the `.deb` on the Pi, `apt install` it, confirm the service runs, connects, plots, and that upgrade/purge behave. Migrate state paths.
 4. Add the updater (protocol messages, daemon trigger, oneshot unit, UI banner); verify an end-to-end browser update on the Pi.
-5. Add `release.yml` (QEMU); tag `v1.0.0`; confirm the Release carries a working `.deb`.
+5. Add `release.yml` (QEMU); tag `v1.0.0`; confirm the Release carries a working `.deb` and the in-app updater installs it end-to-end.
 6. Rewrite README around the `.deb`; demote `install.sh`/`deploy.sh`/rsync to dev-only.
 
 **Rollback:** the `.deb` is versioned — `sudo apt install ./penplotter271_<prev>_arm64.deb` reverts. Until v1.0.0 is tagged, the from-source path still works unchanged.

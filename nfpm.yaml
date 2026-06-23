@@ -29,6 +29,15 @@ contents:
   - src: packaging/plotter-gateway.service
     dst: /lib/systemd/system/plotter-gateway.service
 
+  # Self-update oneshot unit + its script (triggered on demand by the daemon).
+  - src: packaging/plotter-update.service
+    dst: /lib/systemd/system/plotter-update.service
+
+  - src: packaging/update.sh
+    dst: /opt/penplotter271/update.sh
+    file_info:
+      mode: 0755
+
   # Stable serial device + group access (single source of truth in gateway/).
   - src: gateway/99-plotter.rules
     dst: /lib/udev/rules.d/99-plotter.rules

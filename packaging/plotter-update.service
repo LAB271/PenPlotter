@@ -1,0 +1,13 @@
+[Unit]
+Description=PenPlotter271 self-update (download + install the latest release)
+# Triggered on demand by the gateway daemon (via sudo); not enabled/started at boot.
+# Deliberately not Requires=/After= plotter-gateway: this unit restarts that service.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Share the gateway config (GITHUB_REPO, UPDATE_STATUS, PLOTTER_STATE paths).
+EnvironmentFile=-/etc/penplotter271/penplotter271.env
+# Runs as root (default) — needs apt-get install + systemctl restart.
+ExecStart=/opt/penplotter271/update.sh
