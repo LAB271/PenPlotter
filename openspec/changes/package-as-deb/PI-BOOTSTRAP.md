@@ -45,7 +45,7 @@ rsync -av --delete \
   --exclude node_modules --exclude dist --exclude dist-gateway \
   --exclude build --exclude dist-deb --exclude .git \
   --exclude 'gateway/.plotter-state.json' --exclude 'gateway/.session.json' \
-  /Users/dsiderius/Desktop/Internal_Projects/PenPlotter271/ \
+  /absolute/path/to/PenPlotter271/ \
   PI_USER@PI_HOST.local:~/PenPlotter271/
 ```
 
