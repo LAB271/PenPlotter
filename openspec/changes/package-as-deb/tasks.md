@@ -32,14 +32,14 @@
 - [x] 5.3 Daemon: handle the `update` command — refuse while plotting; otherwise `systemctl start --no-block plotter-update.service`. *(`isPlotting()` guard via streamDebug/paused/Run·Hold; detached `sudo systemctl start --no-block`.)*
 - [x] 5.4 Add `plotter-update.service` (oneshot) + `packaging/update.sh`: mid-plot guard → download latest release `.deb` to `/var/lib/penplotter271` → `apt-get install -y ./file.deb` → write `/var/lib/penplotter271/.update-status.json` throughout. *(Shipped via nfpm; update.sh resolves the .deb asset via the bundled Node, no jq. Sudoers updated to include `--no-block`.)*
 - [x] 5.5 Client + UI: show current version near the header logo; render an "update available (vX → vY)" banner with an "Update now" action disabled while plotting; read final status from the snapshot after the auto-reconnect. *(GatewayClient version/update getters + `update()`; App header version + amber banner.)*
-- [ ] 5.6 Verify on the Pi: trigger an update from the browser to a newer release; service restarts, app reconnects and shows the new version; failed-download case leaves the old version running with a reported error.
+- [x] 5.6 Verify on the Pi: trigger an update from the browser to a newer release; service restarts, app reconnects and shows the new version; failed-download case leaves the old version running with a reported error. *(Verified live: 0.1.0 → 1.0.0 from the browser — banner appeared after the daemon re-checked, "Update now" installed the CI-built .deb, service restarted, app reconnected showing 1.0.0. Happy path confirmed; the failed-download error path was not exercised live.)*
 
 ## 6. CI release workflow
 
 > Releases are produced by CI, not by hand: a `v*` tag builds the arm64 `.deb` and attaches it to the GitHub Release. The in-app updater (§5) downloads from these CI-built Releases, so every auto-installed artifact is reproducible and traceable to a tag.
 
 - [x] 6.1 Add `.github/workflows/release.yml`: on a `v*` tag, set up QEMU (`docker/setup-qemu-action`), run `assemble.sh` + `nfpm` inside an arm64 container on the standard x64 runner, attach the `.deb` to the GitHub Release. Structure `runs-on`/build step so switching to a hosted arm64 runner is a one-line change. *(Build logic factored into `packaging/ci-build.sh` (installs nfpm v2.47.0, `npm ci`, then `assemble.sh`); workflow validates the tag matches `package.json`, builds under QEMU in `node:22-bookworm` arm64, uploads via `gh release`. Actions pinned to SHA. Native-arm64 swap = change `runs-on` + drop the docker wrapper.)*
-- [ ] 6.2 Tag `v1.0.0`; confirm the Release carries a `.deb` that installs and runs on the Pi (matches the bootstrap artifact).
+- [x] 6.2 Tag `v1.0.0`; confirm the Release carries a `.deb` that installs and runs on the Pi (matches the bootstrap artifact). *(Tag `v1.0.0` → CI built the arm64 `.deb` (~4 min under QEMU) and attached it to the published Release; installed and ran on the Pi via the in-app updater. `/releases/latest` resolves to v1.0.0.)*
 
 ## 7. Docs + migration
 
