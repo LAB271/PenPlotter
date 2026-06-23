@@ -188,9 +188,7 @@ downloads and installs the latest release `.deb` itself, then restarts — no SS
 app reconnects and shows the new version. To upgrade or **roll back** by hand, install a
 specific `.deb` (config and state are preserved):
 
-```bash
-sudo apt install --allow-downgrades ./penplotter271_<version>_arm64.deb
-```
+
 
 ### Building the package
 
