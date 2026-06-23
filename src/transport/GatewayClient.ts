@@ -1,7 +1,7 @@
 import { Emitter } from '../grbl/emitter';
 import type { Calibration } from '../grbl/settings';
 import type { GrblSettings, StatusReport } from '../grbl/types';
-import type { ClientCommand, ServerMessage, StreamDebug } from '../gateway/protocol';
+import type { ClientCommand, ServerMessage, StreamDebug, UpdateStatus } from '../gateway/protocol';
 
 type ClientEvents = {
   connected: { version: string };
@@ -18,8 +18,10 @@ type ClientEvents = {
   control: { inControl: boolean };
   /** The editable session stored on the daemon (null if none), sent on connect. */
   session: unknown;
-  /** The daemon rejected the connection — a password is needed (or wrong). */
-  authRequired: undefined;
+  /** Installed/latest app version (for the version display + update banner). */
+  versionInfo: { appVersion: string; latestVersion: string | null };
+  /** Self-update progress/outcome. */
+  updateStatus: UpdateStatus;
 };
 
 /**
@@ -37,24 +39,16 @@ export class GatewayClient {
   private _status: StatusReport | null = null;
   private _settings: GrblSettings = {};
   private _version = 'unknown';
+  private _appVersion = 'unknown';
+  private _latestVersion: string | null = null;
+  private _updateStatus: UpdateStatus | null = null;
   private _streamDebug: StreamDebug = { inflight: 0, bytes: 0, queued: 0 };
   private _inControl = false;
   private _calibration: Calibration | null = null;
   private nextId = 1;
   private pending = new Map<number, { resolve: () => void; reject: (e: Error) => void }>();
-  private token = localStorage.getItem('penplotter271.token') ?? '';
-  private needsAuth = false;
 
   constructor(private url = `ws://${location.hostname}:8717`) {}
-
-  /** Submit a password and (re)connect. Stored so it's remembered next time. */
-  authenticate(password: string): void {
-    this.token = password;
-    localStorage.setItem('penplotter271.token', password);
-    this.needsAuth = false;
-    this.wantOpen = true;
-    this.openSocket();
-  }
 
   on = this.events.on.bind(this.events);
   get connected(): boolean {
@@ -68,6 +62,15 @@ export class GatewayClient {
   }
   get firmwareVersion(): string {
     return this._version;
+  }
+  get appVersion(): string {
+    return this._appVersion;
+  }
+  get latestVersion(): string | null {
+    return this._latestVersion;
+  }
+  get updateStatus(): UpdateStatus | null {
+    return this._updateStatus;
   }
   get streamDebug(): StreamDebug {
     return this._streamDebug;
@@ -113,26 +116,19 @@ export class GatewayClient {
       (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
     )
       return;
-    const url = this.token ? `${this.url}?token=${encodeURIComponent(this.token)}` : this.url;
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(this.url);
     this.ws = ws;
     ws.onopen = () => {
       // Re-push calibration so the daemon's engine has the right pen Z / feeds.
       if (this._calibration) this.cmd({ cmd: 'setCalibration', calibration: this._calibration });
     };
     ws.onmessage = (ev) => this.onMessage(JSON.parse(ev.data) as ServerMessage);
-    ws.onclose = (ev) => {
+    ws.onclose = () => {
       if (this.ws === ws) this.ws = null;
       // Reject in-flight commands so awaiting callers (e.g. the held-jog loop) stop.
       for (const p of this.pending.values()) p.reject(new Error('disconnected'));
       this.pending.clear();
       this.setConnected(false);
-      if (ev.code === 4001 || this.needsAuth) {
-        // Rejected for auth — don't retry; wait for the user to enter a password.
-        this.needsAuth = true;
-        this.events.emit('authRequired', undefined);
-        return;
-      }
       if (this.wantOpen) this.retry = setTimeout(() => this.openSocket(), 1500); // reattach
     };
     ws.onerror = () => ws.close();
@@ -140,18 +136,24 @@ export class GatewayClient {
 
   private onMessage(msg: ServerMessage) {
     switch (msg.type) {
-      case 'authError':
-        this.needsAuth = true; // the onclose(4001) that follows emits authRequired
-        break;
       case 'snapshot': {
-        this.needsAuth = false; // got in → password accepted (if any)
         const s = msg.payload;
         this._version = s.version;
         this._settings = s.settings;
         this._status = s.status;
         this._streamDebug = s.streamDebug;
+        this._appVersion = s.appVersion;
+        this._latestVersion = s.latestVersion;
+        this._updateStatus = s.update;
         this.setInControl(s.inControl);
         this.setConnected(s.connected);
+        // Surface version/update state to the UI (it reads these from the snapshot
+        // on every (re)connect — including the reconnect after a self-update).
+        this.events.emit('versionInfo', {
+          appVersion: s.appVersion,
+          latestVersion: s.latestVersion,
+        });
+        if (s.update) this.events.emit('updateStatus', s.update);
         if (s.restoredNote) this.events.emit('log', { dir: 'info', text: s.restoredNote });
         // Hand the daemon-stored session to the UI (it restores the artwork/page).
         this.events.emit('session', s.session ?? null);
@@ -184,6 +186,10 @@ export class GatewayClient {
         } else if (msg.event === 'disconnected') this.setConnected(false);
         else if (msg.event === 'status') this._status = msg.payload;
         else if (msg.event === 'settings') this._settings = msg.payload;
+        else if (msg.event === 'versionInfo') {
+          this._appVersion = msg.payload.appVersion;
+          this._latestVersion = msg.payload.latestVersion;
+        } else if (msg.event === 'updateStatus') this._updateStatus = msg.payload;
         this.events.emit(msg.event, msg.payload as never);
         break;
       }
@@ -265,5 +271,9 @@ export class GatewayClient {
   }
   async setSetting(num: number, value: number): Promise<void> {
     await this.cmd({ cmd: 'setSetting', num, value });
+  }
+  /** Trigger a self-update to the latest release (daemon refuses while plotting). */
+  async update(): Promise<void> {
+    await this.cmd({ cmd: 'update' });
   }
 }

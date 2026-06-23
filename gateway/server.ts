@@ -2,25 +2,27 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync, openSync, fsyncSync, closeSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GrblController } from '../src/grbl/GrblController';
 import { NodeSerialTransport } from './NodeSerialTransport';
 import { DEFAULT_GATEWAY_PORT } from '../src/gateway/protocol';
-import type { ClientMessage, Snapshot, StreamDebug } from '../src/gateway/protocol';
+import type { ClientMessage, Snapshot, StreamDebug, UpdateStatus } from '../src/gateway/protocol';
 import type { StatusReport, GrblSettings } from '../src/grbl/types';
+import { APP_VERSION } from './version';
 
 const PORT = Number(process.env.GATEWAY_PORT ?? DEFAULT_GATEWAY_PORT);
 // Bind to loopback by default so the app is reachable only via an SSH tunnel
 // (access control = SSH keys). Set GATEWAY_HOST=0.0.0.0 to expose on the LAN.
 const HOST = process.env.GATEWAY_HOST ?? '127.0.0.1';
-// Optional shared password. If set, clients must connect with ?token=<password>;
-// the static UI loads, but the control channel (and thus the plotter) is gated.
-const PASSWORD = process.env.GATEWAY_PASSWORD ?? '';
 const DEVICE_PATH = process.env.PLOTTER_PATH; // optional explicit path
 const RETRY_MS = 3000;
-const DIST = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
+// Served GUI. Defaults to the source-relative dist/ for dev; the package sets
+// GATEWAY_DIST=/opt/penplotter271/dist (the bundled gateway.js sits beside dist/,
+// not one level up as in the source tree).
+const DIST =
+  process.env.GATEWAY_DIST ?? join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist');
 // Remembered position survives daemon AND plotter power-off (no homing on this
 // machine, so position is otherwise lost every power cycle). Path override lets
 // it live in a writable spot under the service user on the Pi.
@@ -28,8 +30,23 @@ const STATE_FILE =
   process.env.PLOTTER_STATE ??
   join(fileURLToPath(new URL('.', import.meta.url)), '.plotter-state.json');
 // The editable session (artwork + page layout) lives on the Pi so any device
-// that connects gets the current drawing back.
-const SESSION_FILE = join(fileURLToPath(new URL('.', import.meta.url)), '.session.json');
+// that connects gets the current drawing back. Path override lets it live in a
+// writable spot under the service user (the package sets PLOTTER_SESSION).
+const SESSION_FILE =
+  process.env.PLOTTER_SESSION ??
+  join(fileURLToPath(new URL('.', import.meta.url)), '.session.json');
+
+// ---- self-update config ----
+// Where the update oneshot records its progress; the daemon reads it back after
+// the restart an update causes (the WebSocket drops, so status lives in a file).
+const UPDATE_STATUS_FILE =
+  process.env.UPDATE_STATUS ?? join(dirname(STATE_FILE), '.update-status.json');
+// GitHub repo (owner/name) whose latest Release supplies the update `.deb`.
+const GITHUB_REPO = process.env.GITHUB_REPO ?? 'LAB271/PenPlotter';
+// The daemon can't restart its own service; it kicks this detached oneshot, which
+// runs the apt-get install + restart as root. The sudoers rule scopes the user to
+// exactly this command (incl. --no-block).
+const UPDATE_SERVICE = 'plotter-update.service';
 
 const transport = new NodeSerialTransport({ path: DEVICE_PATH });
 const ctrl = new GrblController(transport);
@@ -137,12 +154,93 @@ let version = 'unknown';
 let lastStatus: StatusReport | null = null;
 let settings: GrblSettings = {};
 let controller: WebSocket | null = null; // the single client holding control
+let latestVersion: string | null = null; // latest released version, best-effort
+let lastUpdateStatus: UpdateStatus | null = null; // set below once log() exists
 
 const clients = new Set<WebSocket>();
 const send = (ws: WebSocket, msg: unknown) =>
   ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
 const broadcast = (msg: unknown) => clients.forEach((ws) => send(ws, msg));
 const log = (text: string) => console.log(`[gateway] ${text}`);
+
+// ---- self-update ----
+function readUpdateStatus(): UpdateStatus | null {
+  try {
+    return JSON.parse(readFileSync(UPDATE_STATUS_FILE, 'utf8')) as UpdateStatus;
+  } catch {
+    return null;
+  }
+}
+function writeUpdateStatus(s: UpdateStatus) {
+  lastUpdateStatus = s;
+  try {
+    writeFileSync(UPDATE_STATUS_FILE, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
+  broadcast({ type: 'event', event: 'updateStatus', payload: s });
+}
+lastUpdateStatus = readUpdateStatus(); // pick up the outcome of an update that just restarted us
+
+/** True if a plot is running or paused mid-plot — used to refuse a self-update. */
+function isPlotting(): boolean {
+  const sd = ctrl.streamDebug;
+  return (
+    sd.inflight > 0 ||
+    sd.queued > 0 ||
+    ctrl.isPaused ||
+    lastStatus?.state === 'Run' ||
+    lastStatus?.state === 'Hold'
+  );
+}
+
+/** Best-effort: query GitHub for the latest release version. Never throws/blocks. */
+async function refreshLatestVersion() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'penplotter271' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { tag_name?: string };
+    const tag = body.tag_name?.replace(/^v/, '') ?? null;
+    if (tag && tag !== latestVersion) {
+      latestVersion = tag;
+      broadcast({
+        type: 'event',
+        event: 'versionInfo',
+        payload: { appVersion: APP_VERSION, latestVersion },
+      });
+    }
+  } catch {
+    /* offline / rate-limited — best-effort, leave latestVersion as-is */
+  }
+}
+
+/** Kick the detached update oneshot (runs apt-get install + restart as root). */
+function startUpdate() {
+  writeUpdateStatus({
+    state: 'installing',
+    fromVersion: APP_VERSION,
+    toVersion: latestVersion ?? undefined,
+    message: 'Starting update…',
+    at: new Date().toISOString(),
+  });
+  // --no-block so this call returns before the oneshot restarts our service.
+  const child = spawn('sudo', ['/usr/bin/systemctl', 'start', '--no-block', UPDATE_SERVICE], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  child.on('error', (e) =>
+    writeUpdateStatus({
+      state: 'error',
+      fromVersion: APP_VERSION,
+      message: `Could not start the updater: ${String(e?.message ?? e)}`,
+      at: new Date().toISOString(),
+    }),
+  );
+  child.unref();
+}
 
 // ---- forward controller events to all clients ----
 const fwd = (event: string) => (payload: unknown) => broadcast({ type: 'event', event, payload });
@@ -236,6 +334,9 @@ function snapshot(ws: WebSocket): Snapshot {
   return {
     connected,
     version,
+    appVersion: APP_VERSION,
+    latestVersion,
+    update: lastUpdateStatus,
     status: lastStatus,
     settings,
     streamDebug: ctrl.streamDebug as StreamDebug,
@@ -313,6 +414,13 @@ async function handleCommand(ws: WebSocket, msg: ClientMessage) {
       case 'saveSession':
         saveSessionBlob(msg.session);
         break;
+      case 'update':
+        if (isPlotting()) {
+          send(ws, { type: 'cmdError', id, message: 'Refused: a plot is running.' });
+          return;
+        }
+        startUpdate();
+        break;
       default:
         send(ws, { type: 'cmdError', id, message: `Unknown command` });
         return;
@@ -363,16 +471,7 @@ const heartbeat = setInterval(() => {
 }, 30000);
 wss.on('close', () => clearInterval(heartbeat));
 
-wss.on('connection', (ws, req) => {
-  if (PASSWORD) {
-    const token = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
-    if (token !== PASSWORD) {
-      send(ws, { type: 'authError', message: 'Wrong or missing password.' });
-      ws.close(4001, 'auth'); // 4001 → client shows the password prompt
-      log('client rejected (bad password)');
-      return;
-    }
-  }
+wss.on('connection', (ws) => {
   clients.add(ws);
   alive.add(ws);
   ws.on('pong', () => alive.add(ws));
@@ -424,9 +523,13 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 httpServer.listen(PORT, HOST, () => {
+  log(`PenPlotter271 gateway v${APP_VERSION}`);
   log(
     `listening on http://${HOST}:${PORT}  (GUI + WebSocket)${HOST === '127.0.0.1' ? ' — loopback only; reach it via an SSH tunnel' : ''}`,
   );
   preventIdleSleep();
   void ensureConnected();
+  // Best-effort latest-release lookup: once on boot, then every 6 h. Non-blocking.
+  void refreshLatestVersion();
+  setInterval(() => void refreshLatestVersion(), 6 * 60 * 60 * 1000);
 });

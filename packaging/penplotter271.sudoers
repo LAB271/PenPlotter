@@ -1,0 +1,7 @@
+# Installed as /etc/sudoers.d/penplotter271 (mode 0440).
+# Lets the gateway service user launch ONLY the self-update unit. That oneshot
+# unit (not the daemon) runs the apt-get install + service restart as root, so
+# the daemon itself holds no general administrative privileges.
+# The command must match exactly what the daemon runs, incl. `--no-block` (so the
+# trigger returns before the oneshot restarts the gateway).
+penplotter ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block plotter-update.service

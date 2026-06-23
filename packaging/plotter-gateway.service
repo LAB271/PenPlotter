@@ -1,0 +1,22 @@
+# systemd unit for the PenPlotter271 gateway, installed by the .deb package.
+# Runs the bundled daemon (no tsx) as a dedicated system user. Configuration is
+# read from /etc/penplotter271/penplotter271.env (a dpkg conffile).
+[Unit]
+Description=PenPlotter271 gateway daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=penplotter
+# Serial access without sudo (the udev rule grants the dialout group r/w).
+SupplementaryGroups=dialout
+EnvironmentFile=/etc/penplotter271/penplotter271.env
+ExecStart=/opt/penplotter271/node /opt/penplotter271/gateway.js
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

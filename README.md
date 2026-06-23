@@ -121,69 +121,88 @@ On macOS the daemon automatically runs `caffeinate -dimsu` for its lifetime so i
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GATEWAY_PORT` | `8717` | HTTP + WebSocket port |
-| `GATEWAY_HOST` | `127.0.0.1` | Bind address. `0.0.0.0` exposes it on the LAN |
-| `GATEWAY_PASSWORD` | _(empty)_ | If set, clients must connect with `?token=…`; the control channel is gated |
+| `GATEWAY_HOST` | `127.0.0.1` | Bind address. The daemon has **no built-in auth** — `0.0.0.0` exposes unauthenticated control to the whole LAN. Keep it on loopback and reach it via an SSH tunnel, a VPN (e.g. Tailscale), or a reverse proxy with its own authentication |
 | `PLOTTER_PATH` | _(auto)_ | Pin the serial device; otherwise auto-detect a `usbserial`/`wchusbserial`/`ttyUSB`/`ttyACM` port |
 | `PLOTTER_STATE` | `gateway/.plotter-state.json` | Where the remembered position is persisted |
 
-## Raspberry Pi deployment
+## Raspberry Pi deployment (Debian package)
 
-The Pi runs the same daemon as a boot service so the plotter is reachable whenever the Pi
-is powered on. `gateway/install.sh` is a one-command, idempotent installer that sets up
-Node, native build tools, dependencies, the GUI build, serial access (a `dialout` group
-membership + a udev rule for a stable device path), an always-on power profile, mDNS, and
-the `plotter-gateway` systemd service:
+The supported way to run on a Pi is the **`.deb` package** (`penplotter271_<version>_arm64.deb`,
+64-bit Raspberry Pi OS Lite). It bundles its own Node runtime and the native `serialport`
+binding — no NodeSource setup and no build step on the Pi.
+
+Download the latest `.deb` from the [Releases](https://github.com/LAB271/PenPlotter/releases)
+page and install it:
 
 ```bash
-# on the Pi, from the repo root
-bash gateway/install.sh
+sudo apt install ./penplotter271_<version>_arm64.deb
 ```
 
-The installer asks whether to set a UI password. With a password it binds `0.0.0.0` and
-gates the control channel; left blank it stays loopback-only and you reach it over an SSH
-tunnel (SSH keys are the access control):
+The package installs the app under `/opt/penplotter271` (bundled Node, gateway, built GUI),
+creates a dedicated `penplotter` system user (added to `dialout` for serial access),
+installs the udev rule for a stable device path and the `plotter-gateway` systemd service
+(enabled + started), keeps writable state under `/var/lib/penplotter271/` (remembered
+position, session), and guards against upgrading mid-plot. Confirm it's running:
+
+```bash
+systemctl status plotter-gateway
+journalctl -u plotter-gateway -f
+```
+
+### Configuration
+
+Operator config lives in **`/etc/penplotter271/penplotter271.env`** — a dpkg conffile, so
+your edits survive package upgrades. After changing it, restart the service with
+`sudo systemctl restart plotter-gateway`. Key settings (the file documents the rest):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GATEWAY_HOST` | `127.0.0.1` | Bind address. **No built-in auth** — keep it on loopback (see Access). `0.0.0.0` exposes unauthenticated control to the whole LAN |
+| `GATEWAY_PORT` | `8717` | HTTP + WebSocket port |
+| `PLOTTER_PATH` | _(auto)_ | Pin the serial device; otherwise auto-detect |
+| `GITHUB_REPO` | `LAB271/PenPlotter` | Repo whose latest Release supplies the in-app update `.deb` |
+
+### Access (SSH tunnel — no web login)
+
+The daemon binds to loopback (`127.0.0.1`) with no built-in authentication, so reach it
+over an SSH tunnel — SSH keys are the access control:
 
 ```bash
 ssh -L 8717:localhost:8717 penplotter@penplotter.local
 # then open http://localhost:8717
 ```
 
+To reach it from a phone or another machine, prefer a VPN (e.g. Tailscale) or a reverse
+proxy that adds its own authentication. Only set `GATEWAY_HOST=0.0.0.0` on a fully trusted
+LAN — it exposes unauthenticated control of the machine to anyone on the network.
+
 Closing the laptop or dropping the tunnel does **not** stop a running plot — the Pi
 streams autonomously; reconnect to monitor. See [`gateway/README.md`](gateway/README.md)
 for the full daemon behavior and access notes.
 
-### Deploying updates from the laptop (rsync — the Pi is not on git)
+### Updating
 
-The Pi has **no git checkout**; code is pushed to it from the laptop with `rsync` over
-SSH and then rebuilt and restarted there. Run this from anywhere on the laptop — the
-source is given as an **absolute path** (with a trailing `/`, meaning "the contents of
-this folder") so it can't accidentally sync the wrong directory:
+When a newer version is released, the app shows an **"update available (vX → vY)"** banner
+in the browser header; click **Update now** (disabled while a plot is running) and the Pi
+downloads and installs the latest release `.deb` itself, then restarts — no SSH needed. The
+app reconnects and shows the new version. To upgrade or **roll back** by hand, install a
+specific `.deb` (config and state are preserved):
 
-```bash
-# 1. push the source (skip node_modules, the build output, and .git)
-#    Source is the absolute repo path — do NOT use "./" (if you're in the wrong
-#    directory, "./" + --delete will push junk and wipe the repo on the Pi).
-rsync -av --delete \
-  --exclude node_modules --exclude dist --exclude .git \
-  --exclude 'gateway/.plotter-state.json' \
-  /absolute/path/to/PenPlotter271/ \
-  penplotter@penplotter.local:~/PenPlotter271/
 
-# 2. rebuild on the Pi and restart the daemon
-ssh penplotter@penplotter.local '
-  cd ~/PenPlotter271 &&
-  npm install &&            # only needed when dependencies changed
-  npm run build &&          # typecheck + rebuild the served GUI
-  sudo systemctl restart plotter-gateway'
-```
 
-> ⚠️ Restarting the daemon **aborts a running plot**. Don't deploy mid-plot — wait until
-> the machine is idle.
+### Building the package
 
-Follow the daemon afterwards with `journalctl -u plotter-gateway -f`.
+Releases are built by CI: pushing a `v*` tag (matching `package.json`) builds the arm64
+`.deb` and attaches it to the GitHub Release — see
+[`.github/workflows/release.yml`](.github/workflows/release.yml). To build one by hand on
+an arm64 host (e.g. the Pi itself), run `bash packaging/assemble.sh` (needs
+[`nfpm`](https://nfpm.goreleaser.com)); the `.deb` lands in `dist-deb/`.
 
-(`deploy.sh` in the repo is a `git pull` + build + restart helper for a *git-connected*
-Pi, including a guard against deploying mid-plot. It is not used by this rsync workflow.)
+### From source (development only)
+
+`gateway/install.sh` (an idempotent from-source installer) and the `rsync` / `deploy.sh`
+laptop-push workflow are **development helpers**, superseded by the package for normal use:
+they build from a repo checkout on the Pi instead of installing a versioned artifact.
 
 ## Scripts
 

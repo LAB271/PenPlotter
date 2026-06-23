@@ -1,9 +1,13 @@
 node_modules
 dist
+dist-gateway
+build
+dist-deb
 *.local
 .DS_Store
 gateway/.plotter-state.json
 gateway/.session.json
+gateway/.update-status.json
 .claude/settings.local.json
 *.FCBak
 .claude/worktrees/

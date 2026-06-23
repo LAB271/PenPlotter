@@ -19,8 +19,23 @@ import {
   normalizeControls,
 } from '../plot/controls';
 import { PlotCanvas } from './PlotCanvas';
+import { Logo } from './Logo';
+import type { UpdateStatus } from '../gateway/protocol';
 
 type Orientation = 'landscape' | 'portrait';
+
+/** True if release version `latest` is strictly newer than `current` (semver-ish). */
+function isNewerVersion(latest: string | null, current: string): boolean {
+  if (!latest || !current || current === 'unknown') return false;
+  const a = latest.split('.').map(Number);
+  const b = current.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
 
 // Artwork is flattened/traced once at full detail (the "master"); the detail
 // slider thins it live for both the preview and the plot. 0.2 mm is finer than
@@ -98,13 +113,15 @@ export function App() {
 
   const [connected, setConnected] = useState(false);
   const [version, setVersion] = useState('');
+  const [appVersion, setAppVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [status, setStatus] = useState<StatusReport | null>(null);
   const [progress, setProgress] = useState<{ acked: number; total: number } | null>(null);
   // Machine motion limits read from GRBL settings ($120/$121 accel, $11 junction
   // deviation), used to estimate plot time with realistic accel/cornering.
   const [motion, setMotion] = useState<{ accel?: number; jdev?: number }>({});
   const [alert, setAlert] = useState('');
-  const [needsAuth, setNeedsAuth] = useState(false);
   const [cal, setCal] = useState<Calibration>(loadCalibration);
 
   // Restore the editable session (artwork + page) so reopening the tab / reloading
@@ -144,13 +161,17 @@ export function App() {
     const unsubs = [
       ctrl.on('connected', (e) => {
         setConnected(true);
-        setNeedsAuth(false);
         setVersion(e.version);
         setMotion(readMotion(ctrl.settings)); // settings arrive with the snapshot
         setAlert('');
         pushLog('SYS', `connected — GRBL ${e.version}`);
       }),
       ctrl.on('settings', (s) => setMotion(readMotion(s))),
+      ctrl.on('versionInfo', (e) => {
+        setAppVersion(e.appVersion);
+        setLatestVersion(e.latestVersion);
+      }),
+      ctrl.on('updateStatus', (s) => setUpdateStatus(s)),
       ctrl.on('disconnected', () => {
         setConnected(false);
         setStatus(null);
@@ -250,9 +271,8 @@ export function App() {
         setAlert(`ALARM:${e.code} — unlock ($X) or reset.`);
         pushLog('ALARM', `ALARM:${e.code}`);
       }),
-      ctrl.on('authRequired', () => setNeedsAuth(true)),
     ];
-    void ctrl.connect(); // auto-attach to the daemon on load (prompts for password if needed)
+    void ctrl.connect(); // auto-attach to the daemon on load
     return () => {
       unsubs.forEach((u) => u());
       void ctrl.disconnect();
@@ -622,12 +642,22 @@ export function App() {
       ? `${formatDuration(totalEstSec)} total`
       : '';
 
+  const updateAvailable = isNewerVersion(latestVersion, appVersion);
+  const updating = updateStatus?.state === 'downloading' || updateStatus?.state === 'installing';
+
   return (
     <div className="flex h-dvh flex-col bg-slate-100 text-slate-800">
-      {needsAuth && <LoginOverlay onSubmit={(pw) => ctrl()?.authenticate(pw)} />}
       {/* Top bar */}
       <header className="flex flex-wrap items-center gap-2 border-b border-slate-300 bg-white px-4 py-2 shadow-sm md:gap-3">
-        <span className="text-sm font-semibold tracking-tight">PenPlotter271</span>
+        <Logo className="h-4 w-auto" />
+        <span className="text-sm font-semibold tracking-tight">
+          PenPlotter271
+          {appVersion ? (
+            <span className="ml-1 align-top text-[10px] font-normal text-slate-400">
+              v{appVersion}
+            </span>
+          ) : null}
+        </span>
         <span
           className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-slate-300'}`}
         />
@@ -701,6 +731,41 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {/* Self-update banner: shown when a newer release exists or an update is in
+          flight. "Update now" is disabled while plotting (the daemon also refuses). */}
+      {(updateAvailable || updating || updateStatus?.state === 'error') && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900">
+          {updating ? (
+            <span>
+              Updating… {updateStatus?.message ?? ''} The app will reconnect automatically.
+            </span>
+          ) : updateStatus?.state === 'error' && !updateAvailable ? (
+            <span className="text-red-700">Update failed: {updateStatus.message}</span>
+          ) : (
+            <>
+              <span>
+                Update available — v{appVersion} → v{latestVersion}
+                {updateStatus?.state === 'error'
+                  ? ` (last attempt failed: ${updateStatus.message})`
+                  : ''}
+              </span>
+              <button
+                className={btnPrimary}
+                disabled={!connected || plotting}
+                title={plotting ? 'Disabled while a plot is running' : undefined}
+                onClick={() =>
+                  void ctrl()
+                    ?.update()
+                    .catch(() => undefined)
+                }
+              >
+                Update now
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
         {/* Center canvas — fills the screen on phones; middle column on desktop. */}
@@ -1104,38 +1169,6 @@ function Section(props: { title: string; children: React.ReactNode; className?: 
       </h2>
       {props.children}
     </section>
-  );
-}
-
-function LoginOverlay({ onSubmit }: { onSubmit: (pw: string) => void }) {
-  const [pw, setPw] = useState('');
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70">
-      <form
-        className="w-72 rounded-lg bg-white p-5 shadow-xl"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (pw) onSubmit(pw);
-        }}
-      >
-        <h2 className="mb-1 text-sm font-semibold">PenPlotter271</h2>
-        <p className="mb-3 text-xs text-slate-500">Enter the password to control the plotter.</p>
-        <input
-          type="password"
-          autoFocus
-          className="mb-3 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-          placeholder="Password"
-          value={pw}
-          onChange={(e) => setPw(e.target.value)}
-        />
-        <button
-          type="submit"
-          className="w-full rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Unlock
-        </button>
-      </form>
-    </div>
   );
 }
 
