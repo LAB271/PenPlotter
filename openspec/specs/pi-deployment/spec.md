@@ -3,9 +3,7 @@
 ## Purpose
 
 Define the deployment of the gateway as an always-on, headless service on a Raspberry Pi: boot auto-start, stable serial device access without elevated privileges, an OS that never sleeps or throttles an unattended plot, a WiFi-reachable web app gated by SSH, and a repeatable provisioning process.
-
 ## Requirements
-
 ### Requirement: Boot auto-start service
 
 The gateway SHALL run as a host service that starts automatically when the Raspberry Pi powers on, connects to the plotter (retrying until present), and restarts automatically if it crashes — so powering on the Pi and plotter is enough to reach a ready, awaiting-plots state with no manual steps.
@@ -22,32 +20,22 @@ The gateway SHALL run as a host service that starts automatically when the Raspb
 
 ### Requirement: Access-gated web app
 
-The Pi SHALL NOT expose plotter control openly on the WiFi. The daemon SHALL support two access models: (a) by default it binds to loopback, so the app is reachable only through an SSH local port-forward — access is an SSH key authorized on the Pi, and keys MAY be distributed to the team via a shared 1Password vault/group; or (b) optionally it binds to the LAN with a shared password, in which case the control channel SHALL be refused until the correct password is supplied. Under either model, an unauthorized device on the same WiFi SHALL NOT be able to drive the plotter.
+The daemon has **no built-in authentication**. The shipped package SHALL bind to the LAN (`0.0.0.0`) by default so the web app is reachable from any device on the network without an SSH tunnel. Because there is no authentication, binding to the LAN exposes unauthenticated plotter control to every device on the network, so this default is intended ONLY for a trusted LAN and SHALL be documented as such. On an untrusted network the operator SHALL be able to restrict access by setting the bind address to loopback (`127.0.0.1`) in the configuration file, in which case the app is reachable only over an SSH local port-forward, a VPN, or a reverse proxy that adds its own authentication. The development daemon (run from source) SHALL continue to default to loopback.
 
-#### Scenario: Access through an SSH tunnel (loopback default)
+#### Scenario: LAN access without a tunnel (default)
 
-- **WHEN** an authorized operator opens an SSH local port-forward to the loopback-bound daemon and browses the forwarded local port
-- **THEN** the web app loads and its control channel connects back through the tunnel, and the operator can run the plotter
+- **WHEN** an operator on the trusted LAN opens the Pi's address in a browser, with the shipped defaults
+- **THEN** the web app loads and its control channel connects without an SSH tunnel or a login, and the operator can run the plotter
 
-#### Scenario: Optional shared-password LAN access
+#### Scenario: Restricting access on an untrusted network
 
-- **WHEN** the daemon is configured with a shared password and bound to the LAN, and an operator on the WiFi opens the Pi's address and supplies the password
-- **THEN** the web app loads and the control channel connects once the password is accepted, and the operator can run the plotter
+- **WHEN** an operator sets `GATEWAY_HOST=127.0.0.1` in the configuration file and restarts the service
+- **THEN** the daemon refuses direct connections from other devices on the network, and the app is reachable only through an SSH tunnel, a VPN, or an authenticating reverse proxy
 
-#### Scenario: Not reachable without authorization
+#### Scenario: Unauthenticated exposure is explicit
 
-- **WHEN** an unauthorized device on the same WiFi opens the Pi's address with no SSH tunnel and no/wrong password
-- **THEN** it cannot control the plotter — the loopback bind refuses the direct connection, or (in LAN mode) the control channel is rejected without the correct password
-
-#### Scenario: Upload and plot
-
-- **WHEN** an authorized operator uploads a drawing in the web app and starts a plot
-- **THEN** the drawing is converted in the browser and streamed by the Pi to the plotter
-
-#### Scenario: Team access managed centrally
-
-- **WHEN** a teammate is added to (or removed from) the shared 1Password group/vault holding the SSH key, with their public key on the Pi
-- **THEN** they gain (or lose) the ability to open the tunnel and use the plotter
+- **WHEN** the package is installed with its default configuration
+- **THEN** the shipped configuration and documentation state that plotter control is exposed unauthenticated on the LAN and that the LAN-bound default is intended only for a trusted network
 
 ### Requirement: Unattended continuation
 
@@ -83,9 +71,20 @@ The Pi SHALL be configured so the OS does not sleep or throttle the link/process
 
 ### Requirement: Repeatable provisioning
 
-Setting up a fresh Pi SHALL follow a repeatable, documented (and scripted where practical) process that installs the runtime and dependencies, builds the web app, and installs the service and device rules.
+Setting up a Pi SHALL be done by installing a single versioned Debian package (`penplotter271_<version>_arm64.deb`, targeting 64-bit Raspberry Pi OS) with `apt`. The package SHALL be self-contained — bundling the Node runtime and the native serial binding so no separate Node install or build step is required on the Pi — and its maintainer scripts SHALL install the systemd service and device rules, create the dedicated service user with serial access, lay down a default configuration file, and enable the service on boot. Upgrading and removing SHALL likewise go through the package manager. A from-source path MAY remain for development, but is not the supported install path.
 
-#### Scenario: Fresh Pi to running gateway
+#### Scenario: Fresh Pi to running gateway via the package
 
-- **WHEN** an operator follows the provisioning steps/script on a fresh Pi
-- **THEN** the gateway ends up installed, enabled on boot, and serving the web app, without undocumented manual fixes
+- **WHEN** an operator runs `sudo apt install ./penplotter271_<version>_arm64.deb` on a fresh 64-bit Raspberry Pi OS install
+- **THEN** the gateway ends up installed with its bundled runtime, enabled on boot, serving the web app, and connected to the plotter, without a separate Node install, `npm` build, or other manual fixes
+
+#### Scenario: Upgrade preserves operator configuration
+
+- **WHEN** a newer package version is installed over an existing one
+- **THEN** the service is updated and restarted, and operator edits to the configuration file and the remembered machine state are preserved
+
+#### Scenario: Clean removal
+
+- **WHEN** the package is purged
+- **THEN** the service is stopped and disabled and the package-managed files are removed
+

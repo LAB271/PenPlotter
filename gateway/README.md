@@ -39,18 +39,20 @@ It bundles its own Node runtime, installs the app under `/opt/penplotter271`, ke
 
 Power-cycle to confirm it auto-starts and auto-connects. Logs: `journalctl -u plotter-gateway -f`.
 
-### Access (SSH tunnel — no web login)
+### Access (LAN — no tunnel, no web login)
 
-The daemon binds to **loopback only** (`127.0.0.1:8717`), so it's not exposed on the WiFi. Reach it from your laptop over an SSH tunnel — SSH key auth *is* the access control:
+The `.deb` ships bound to `0.0.0.0`, so anyone on the LAN opens `http://<pi-hostname>.local:8717` directly — no tunnel. There is **no built-in auth**, so this exposes plotter control to every device on the network and is intended **only for a trusted LAN**.
+
+On an untrusted network, set `GATEWAY_HOST=127.0.0.1` in the conffile (loopback only) and reach it over an SSH tunnel — SSH key auth *is* the access control:
 
 ```bash
 ssh -L 8717:localhost:8717 pi@<pi-hostname>.local
 # then open http://localhost:8717 in your browser
 ```
 
-Closing the laptop / dropping the tunnel does **not** stop a running plot (the Pi streams autonomously); reconnect to monitor.
+Closing the laptop / dropping the connection does **not** stop a running plot (the Pi streams autonomously); reconnect to monitor.
 
-**Team access via 1Password:** put each member's SSH **public** key in the Pi's `~/.ssh/authorized_keys`; share the **private** keys through a 1Password shared vault for your group (enable the 1Password SSH agent). Prefer one key per person so you can revoke by removing their vault access + their `authorized_keys` line. (Off-site access later: SSH over Tailscale — deferred.)
+**Team access via 1Password (tunnel mode):** put each member's SSH **public** key in the Pi's `~/.ssh/authorized_keys`; share the **private** keys through a 1Password shared vault for your group (enable the 1Password SSH agent). Prefer one key per person so you can revoke by removing their vault access + their `authorized_keys` line. (Off-site access later: SSH over Tailscale — deferred.)
 
 > Position note: after a power cycle the daemon restores the last position so you needn't re-calibrate, but with no homing/limit switches this is approximate (~1 cm) and assumes the gantry didn't move while off. **Stop the plot before powering off** for the closest restore; **Set Work Zero** to re-calibrate if it drifted. Precise repeatability requires adding limit switches + homing.
 

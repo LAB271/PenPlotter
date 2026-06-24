@@ -121,7 +121,7 @@ On macOS the daemon automatically runs `caffeinate -dimsu` for its lifetime so i
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GATEWAY_PORT` | `8717` | HTTP + WebSocket port |
-| `GATEWAY_HOST` | `127.0.0.1` | Bind address. The daemon has **no built-in auth** — `0.0.0.0` exposes unauthenticated control to the whole LAN. Keep it on loopback and reach it via an SSH tunnel, a VPN (e.g. Tailscale), or a reverse proxy with its own authentication |
+| `GATEWAY_HOST` | `127.0.0.1` | Bind address. This is the **code default** (e.g. `npm run gateway` on a dev laptop); the **`.deb` ships `0.0.0.0`** (LAN — see the deployment section). The daemon has **no built-in auth**, so `0.0.0.0` exposes unauthenticated control to the whole LAN — use loopback + an SSH tunnel/VPN/reverse proxy on untrusted networks |
 | `PLOTTER_PATH` | _(auto)_ | Pin the serial device; otherwise auto-detect a `usbserial`/`wchusbserial`/`ttyUSB`/`ttyACM` port |
 | `PLOTTER_STATE` | `gateway/.plotter-state.json` | Where the remembered position is persisted |
 
@@ -157,26 +157,28 @@ your edits survive package upgrades. After changing it, restart the service with
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GATEWAY_HOST` | `127.0.0.1` | Bind address. **No built-in auth** — keep it on loopback (see Access). `0.0.0.0` exposes unauthenticated control to the whole LAN |
+| `GATEWAY_HOST` | `0.0.0.0` | Bind address. Ships LAN-exposed so the app opens with no tunnel. **No built-in auth** — `0.0.0.0` exposes unauthenticated control to the whole LAN (see Access); set `127.0.0.1` for loopback-only |
 | `GATEWAY_PORT` | `8717` | HTTP + WebSocket port |
 | `PLOTTER_PATH` | _(auto)_ | Pin the serial device; otherwise auto-detect |
 | `GITHUB_REPO` | `LAB271/PenPlotter` | Repo whose latest Release supplies the in-app update `.deb` |
 
-### Access (SSH tunnel — no web login)
+### Access (LAN — no tunnel, no web login)
 
-The daemon binds to loopback (`127.0.0.1`) with no built-in authentication, so reach it
-over an SSH tunnel — SSH keys are the access control:
+The package ships bound to `0.0.0.0`, so anyone on the LAN just opens the app — no SSH
+tunnel needed:
 
-```bash
-ssh -L 8717:localhost:8717 penplotter@penplotter.local
-# then open http://localhost:8717
+```
+http://penplotter.local:8717
+# (or the Pi's IP if .local/mDNS doesn't resolve on the device)
 ```
 
-To reach it from a phone or another machine, prefer a VPN (e.g. Tailscale) or a reverse
-proxy that adds its own authentication. Only set `GATEWAY_HOST=0.0.0.0` on a fully trusted
-LAN — it exposes unauthenticated control of the machine to anyone on the network.
+There is **no built-in authentication**: anyone who can reach that address can jog the
+gantry and start or stop plots. This is acceptable only on a **fully trusted LAN**. If the
+network has untrusted devices, set `GATEWAY_HOST=127.0.0.1` in the conffile (loopback only)
+and reach the app over an SSH tunnel (`ssh -L 8717:localhost:8717 penplotter@penplotter.local`),
+a VPN (e.g. Tailscale), or a reverse proxy that adds its own authentication.
 
-Closing the laptop or dropping the tunnel does **not** stop a running plot — the Pi
+Closing the browser or dropping the connection does **not** stop a running plot — the Pi
 streams autonomously; reconnect to monitor. See [`gateway/README.md`](gateway/README.md)
 for the full daemon behavior and access notes.
 
