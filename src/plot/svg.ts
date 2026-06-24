@@ -9,12 +9,30 @@ export interface ImportResult {
   skipped: number;
 }
 
+export interface FlattenOptions {
+  /** Reports progress as (subpaths processed, total subpaths). */
+  onProgress?: (done: number, total: number) => void;
+  /** Polled cooperatively; set `aborted` to true to cancel an in-flight import. */
+  signal?: { aborted: boolean };
+}
+
+/** Thrown by flattenSvg when its abort signal fires; callers should ignore it. */
+export const ABORTED = Symbol('svg-import-aborted');
+
 /**
  * Flatten an SVG's stroke geometry into polylines in millimeters, with the
  * artwork's bounding-box top-left at (0,0). Browser-only (uses the DOM's SVG
  * engine: getCTM + getPointAtLength). Stroke-based: fills/text are ignored.
+ *
+ * Async + time-sliced: large files (thousands of subpaths) would otherwise block
+ * the main thread for many seconds and freeze the UI. The work is yielded to the
+ * event loop every ~50 ms so the page stays responsive and progress can be shown.
  */
-export function flattenSvg(svgText: string, toleranceMm: number): ImportResult {
+export async function flattenSvg(
+  svgText: string,
+  toleranceMm: number,
+  opts: FlattenOptions = {},
+): Promise<ImportResult> {
   const parsed = new DOMParser().parseFromString(svgText, 'image/svg+xml');
   if (parsed.querySelector('parsererror')) throw new Error('Invalid SVG file.');
   const rootEl = parsed.querySelector('svg');
@@ -35,29 +53,58 @@ export function flattenSvg(svgText: string, toleranceMm: number): ImportResult {
     const polylines: Polyline[] = [];
     let skipped = 0;
 
-    for (const el of Array.from(svg.querySelectorAll<SVGGraphicsElement>(DRAWABLE))) {
-      // A null CTM means the element is not rendered (display:none, inside
-      // <defs>/<clipPath>/<symbol>, or detached) — skip cheaply, no style lookup.
-      const ctm = el.getCTM();
-      if (!ctm || !isVisible(el)) {
-        skipped++;
-        continue;
+    // Resolve each element's subpaths once (cheap) so we can report progress
+    // against the total stroke count — one giant <path> dominates the work, so
+    // per-element progress alone would stall at "stuck on one element".
+    const els = Array.from(svg.querySelectorAll<SVGGraphicsElement>(DRAWABLE));
+    const work = els.map((el) => ({ el, subDs: shapeToSubpathDs(el) }));
+    const total = work.reduce((n, w) => n + w.subDs.length, 0);
+
+    // Cooperative time-slicing: yield to the event loop (and report progress)
+    // every ~50 ms so a multi-second import never freezes the UI. `tick` must be
+    // called often enough that no synchronous run between two calls exceeds the
+    // budget — a single huge subpath can need >100k samples, so sampleSubpaths
+    // ticks inside its sample loop, not just at subpath boundaries.
+    let processed = 0;
+    let lastYield = performance.now();
+    const tick = async () => {
+      if (performance.now() - lastYield < 50) return;
+      if (opts.signal?.aborted) throw ABORTED;
+      opts.onProgress?.(processed, total);
+      await new Promise((r) => setTimeout(r));
+      lastYield = performance.now();
+    };
+
+    const scratch = document.createElementNS(SVG_NS, 'path');
+    svg.appendChild(scratch);
+    try {
+      for (const { el, subDs } of work) {
+        // A null CTM means the element is not rendered (display:none, inside
+        // <defs>/<clipPath>/<symbol>, or detached) — skip cheaply, no style lookup.
+        const ctm = el.getCTM();
+        if (!ctm || !isVisible(el) || subDs.length === 0) {
+          skipped++;
+          processed += subDs.length;
+          await tick();
+          continue;
+        }
+        const sampled = await sampleSubpaths(scratch, subDs, tolUser, {
+          tick,
+          subpathDone: () => {
+            processed++;
+          },
+        });
+        for (let s = 0; s < sampled.length; s++) {
+          const mm = sampled[s].map((p) => toMm(p, ctm, unitToMm));
+          const simplified = simplifyPolyline(mm, toleranceMm);
+          if (simplified.length >= 2) polylines.push(simplified);
+          if ((s & 0x3f) === 0x3f) await tick(); // keep the UI live during simplify too
+        }
       }
-      const subpaths = shapeToSubpathDs(el);
-      if (subpaths.length === 0) {
-        skipped++;
-        continue;
-      }
-      // Sample the WHOLE path, then split into polylines at subpath boundaries.
-      // Sampling each subpath as its own <path> (the old approach) mis-placed
-      // relative subpaths — their leading `m` was measured from (0,0) instead of
-      // the running point — which garbled glyphs built from relative subpaths.
-      for (const local of sampleSubpaths(svg, subpaths, tolUser)) {
-        const mm = local.map((p) => toMm(p, ctm, unitToMm));
-        const simplified = simplifyPolyline(mm, toleranceMm);
-        if (simplified.length >= 2) polylines.push(simplified);
-      }
+    } finally {
+      svg.removeChild(scratch);
     }
+    opts.onProgress?.(total, total);
 
     const { widthMm, heightMm } = normalizeToOrigin(polylines);
     return { artwork: { polylines, widthMm, heightMm }, skipped };
@@ -146,52 +193,68 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /**
  * Sample a path's subpaths into point arrays (one per pen-down stroke), in the
- * path's local coordinates. Positions come from ONE path element built from all
- * subpaths joined — so the browser resolves relative subpaths correctly. Subpath
- * boundaries are measured as cumulative lengths of PREFIX paths (subpaths 0..k),
- * which match the full path's own arc-length parametrization. (Summing each
- * subpath's standalone length instead drifts over many subpaths, so windows creep
- * across boundaries and splice unrelated strokes together with stray lines.)
+ * path's local coordinates, on a single reused scratch <path>.
+ *
+ * Each subpath is measured and sampled on its OWN small path — O(total length),
+ * not O(subpaths × length). (The old approach joined all subpaths into one path
+ * and re-measured a growing prefix string per subpath, which is O(subpaths²) and
+ * hangs on files with thousands of subpaths in one element.)
+ *
+ * A relative subpath (leading lowercase `m`) is positioned relative to the pen
+ * point left by the previous subpath; sampled standalone, a fresh path treats its
+ * leading moveto as absolute, so we translate those samples back by the running
+ * point `cur`. This reproduces the joined-path geometry (verified within ~0.001 mm)
+ * without its quadratic cost.
+ *
+ * `hooks.tick` is awaited periodically (inside the sample loop, not just at subpath
+ * boundaries) so the caller can yield to the event loop / report progress even
+ * within a single very long subpath. `hooks.subpathDone` is called once per subpath.
  */
-function sampleSubpaths(svg: SVGSVGElement, subDs: string[], stepUser: number): Point[][] {
-  const full = document.createElementNS(SVG_NS, 'path');
-  full.setAttribute('d', subDs.join(' '));
-  svg.appendChild(full);
-  const prefix = document.createElementNS(SVG_NS, 'path');
-  svg.appendChild(prefix);
-  try {
-    // Cumulative length at the end of each subpath, measured on growing prefixes.
-    const bounds: number[] = [0];
-    let acc = '';
-    for (const d of subDs) {
-      acc += (acc ? ' ' : '') + d;
-      prefix.setAttribute('d', acc);
-      const L = prefix.getTotalLength();
-      bounds.push(isFinite(L) ? L : bounds[bounds.length - 1]);
-    }
+interface SampleHooks {
+  tick: () => void | Promise<void>;
+  subpathDone: () => void;
+}
 
-    const out: Point[][] = [];
-    for (let s = 0; s < subDs.length; s++) {
-      const start = bounds[s];
-      const len = bounds[s + 1] - start;
-      if (len <= 1e-6) continue; // moveto-only / empty subpath: no stroke
-      const n = Math.max(1, Math.ceil(len / stepUser));
-      const pts: Point[] = [];
-      // Sample strictly INSIDE this subpath's range so a sample never lands on a
-      // boundary (where getPointAtLength is ambiguous between adjacent strokes).
-      const eps = 1e-4;
-      for (let i = 0; i <= n; i++) {
-        const off = (eps + (i / n) * (1 - 2 * eps)) * len;
-        const p = full.getPointAtLength(start + off);
-        pts.push({ x: p.x, y: p.y });
-      }
-      out.push(pts);
+async function sampleSubpaths(
+  scratch: SVGPathElement,
+  subDs: string[],
+  stepUser: number,
+  hooks: SampleHooks,
+): Promise<Point[][]> {
+  const out: Point[][] = [];
+  let cur: Point = { x: 0, y: 0 }; // running pen point, in the path's local frame
+  for (const d of subDs) {
+    scratch.setAttribute('d', d);
+    const len = scratch.getTotalLength();
+    const rel = /^\s*m/.test(d);
+    const tx = rel ? cur.x : 0;
+    const ty = rel ? cur.y : 0;
+    if (!isFinite(len) || len <= 1e-6) {
+      // moveto-only / empty subpath: no stroke, but it still advances the pen.
+      const p0 = scratch.getPointAtLength(0);
+      cur = { x: p0.x + tx, y: p0.y + ty };
+      hooks.subpathDone();
+      await hooks.tick();
+      continue;
     }
-    return out;
-  } finally {
-    svg.removeChild(prefix);
-    svg.removeChild(full);
+    const n = Math.max(1, Math.ceil(len / stepUser));
+    // Sample strictly INSIDE the subpath so a sample never lands exactly on an
+    // endpoint (where getPointAtLength can be ambiguous on closed paths).
+    const eps = 1e-4;
+    const pts: Point[] = [];
+    for (let i = 0; i <= n; i++) {
+      const off = (eps + (i / n) * (1 - 2 * eps)) * len;
+      const p = scratch.getPointAtLength(off);
+      pts.push({ x: p.x + tx, y: p.y + ty });
+      // Yield within long subpaths so the UI never blocks for more than a slice.
+      if ((i & 0xff) === 0xff) await hooks.tick();
+    }
+    out.push(pts);
+    cur = pts[pts.length - 1];
+    hooks.subpathDone();
+    await hooks.tick();
   }
+  return out;
 }
 
 function toMm(p: Point, ctm: DOMMatrix | null, unitToMm: number): Point {

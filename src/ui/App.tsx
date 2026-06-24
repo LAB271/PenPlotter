@@ -4,7 +4,7 @@ import { Calibration } from '../grbl/settings';
 import { StatusReport, type GrblSettings } from '../grbl/types';
 import { loadCalibration, saveCalibration } from './calibrationStore';
 import { loadSession, saveSession, type Session, type PersistedArt } from './sessionStore';
-import { flattenSvg } from '../plot/svg';
+import { flattenSvg, ABORTED } from '../plot/svg';
 import { imageToField, traceField, type FieldSource } from '../plot/raster';
 import { applyDetail } from '../plot/detail';
 import { estimatePlotTime, formatDuration, generateGcode } from '../plot/gcode';
@@ -139,6 +139,10 @@ export function App() {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const deriveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Abort token for the in-flight SVG flatten (import or re-derive). Starting a new
+  // one flips the previous token's `aborted`, so the superseded run bails out at its
+  // next yield instead of wasting cycles or clobbering newer state.
+  const flattenAbort = useRef<{ aborted: boolean }>({ aborted: false });
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   // True while a plot is streaming — locks placement + drawing controls.
   const [plotting, setPlotting] = useState(false);
@@ -412,10 +416,16 @@ export function App() {
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-importing the same file
     if (!file) return;
+    const signal = (flattenAbort.current = { aborted: false });
     try {
       const text = await file.text();
       const controls: ArtControls = { ...DEFAULT_CONTROLS, samplingMm: MASTER_TOLERANCE_MM };
-      const { artwork: art, skipped } = flattenSvg(text, controls.samplingMm);
+      setAlert('Importing SVG…');
+      const { artwork: art, skipped } = await flattenSvg(text, controls.samplingMm, {
+        signal,
+        onProgress: (done, total) =>
+          setAlert(`Importing SVG… ${total ? Math.round((100 * done) / total) : 0}%`),
+      });
       if (art.polylines.length === 0) {
         setAlert(
           'No plottable stroke geometry in that SVG (it is likely fill-based). ' +
@@ -430,6 +440,7 @@ export function App() {
           : '',
       );
     } catch (err) {
+      if (err === ABORTED) return; // superseded by a newer import — stay quiet
       setAlert(String((err as Error).message ?? err));
     }
   }
@@ -506,15 +517,16 @@ export function App() {
 
   // Re-derive an artwork's master from its retained source at its current controls.
   // Expensive (re-trace / re-flatten) — called debounced from scheduleDerive.
-  function deriveMaster(id: string) {
+  async function deriveMaster(id: string) {
     const src = sourcesRef.current.get(id);
     const it = itemsRef.current.find((i) => i.id === id);
     if (!src || !it) return;
+    const signal = (flattenAbort.current = { aborted: false });
     try {
       const c = it.controls;
       const art =
         src.kind === 'svg'
-          ? flattenSvg(src.text, c.samplingMm).artwork
+          ? (await flattenSvg(src.text, c.samplingMm, { signal })).artwork
           : traceField(src.field, {
               threshold: c.threshold,
               levels: c.levels,
@@ -530,6 +542,7 @@ export function App() {
         ),
       );
     } catch (e) {
+      if (e === ABORTED) return; // superseded by a newer derive/import — stay quiet
       setAlert(String((e as Error).message ?? e));
     }
   }
@@ -538,9 +551,9 @@ export function App() {
     if (!sourcesRef.current.has(id)) return; // source dropped (e.g. after a reload)
     setUpdatingId(id);
     if (deriveTimer.current) clearTimeout(deriveTimer.current);
-    deriveTimer.current = setTimeout(() => {
-      deriveMaster(id);
-      setUpdatingId(null);
+    deriveTimer.current = setTimeout(async () => {
+      await deriveMaster(id);
+      setUpdatingId((cur) => (cur === id ? null : cur));
     }, 200);
   }
 
@@ -554,6 +567,7 @@ export function App() {
   }
 
   function removeItem(id: string) {
+    flattenAbort.current.aborted = true; // stop any in-flight derive/import work
     sourcesRef.current.delete(id);
     setItems((list) => list.filter((i) => i.id !== id));
     setSelectedId((sel) => (sel === id ? null : sel));
