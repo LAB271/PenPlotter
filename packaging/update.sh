@@ -62,8 +62,11 @@ JS
 # 4. Install. dpkg's postinst restarts plotter-gateway; this script (own cgroup)
 #    survives that and writes the final status the new daemon reads back.
 #    --allow-downgrades so re-installing the same/older version works for testing.
+#    Non-interactive + --force-confold so a release that changes a conffile installs
+#    without a (terminal-less) prompt and preserves operator edits to the config.
 write_status installing "Installing v$TO…" "$TO"
-if apt-get install -y --allow-downgrades "$DEB" >/var/log/penplotter271-update.log 2>&1; then
+if DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades \
+  -o Dpkg::Options::="--force-confold" "$DEB" >/var/log/penplotter271-update.log 2>&1; then
   write_status success "Updated to v$TO." "$TO"
   rm -f "$DEB"
 else
