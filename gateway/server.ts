@@ -182,6 +182,29 @@ function writeUpdateStatus(s: UpdateStatus) {
 }
 lastUpdateStatus = readUpdateStatus(); // pick up the outcome of an update that just restarted us
 
+// dpkg restarts us *mid-install*, so the status we just read is the non-terminal
+// "installing" the updater wrote before apt-get returned. The update oneshot runs
+// in its own cgroup and writes the terminal success/error a moment later, but the
+// WebSocket is gone so it can't push it to us — and we'd otherwise never re-read
+// the file, leaving the "Updating…" banner stuck forever. Poll until it settles,
+// then broadcast. No-op unless we actually booted into an in-flight update.
+function pollUpdateCompletion(): void {
+  const inflight = lastUpdateStatus?.state;
+  if (inflight !== 'downloading' && inflight !== 'installing') return;
+  const deadline = Date.now() + 120_000;
+  const tick = () => {
+    const s = readUpdateStatus();
+    if (s && JSON.stringify(s) !== JSON.stringify(lastUpdateStatus)) {
+      lastUpdateStatus = s;
+      broadcast({ type: 'event', event: 'updateStatus', payload: s });
+    }
+    const settled = s?.state === 'success' || s?.state === 'error';
+    if (!settled && Date.now() < deadline) setTimeout(tick, 1000).unref();
+  };
+  setTimeout(tick, 1000).unref();
+}
+pollUpdateCompletion();
+
 /** True if a plot is running or paused mid-plot — used to refuse a self-update. */
 function isPlotting(): boolean {
   const sd = ctrl.streamDebug;
